@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://www.vinted.fr https://*.vinted.net https://*.vinted.fr;">
+  <title>GB Browser</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand">
+      <img class="logo-img" src="logo.png" alt="">
+      <div>
+        <div class="brand-name">GB <span>Browser</span></div>
+        <div class="brand-sub">Anti-detect</div>
+      </div>
+    </div>
+
+    <div class="nav-section">Espace de travail</div>
+    <nav>
+      <a class="nav-item" data-page="profiles"><span class="ico" data-icon="users"></span>Profils<span class="count" id="nc-profiles">0</span></a>
+      <a class="nav-item" data-page="health"><span class="ico" data-icon="pulse"></span>Santé<span class="count" id="nc-health">0</span></a>
+      <a class="nav-item" data-page="accounts"><span class="ico" data-icon="userplus"></span>Comptes à créer<span class="count" id="nc-acc">0</span></a>
+      <a class="nav-item" data-page="proxies"><span class="ico" data-icon="globe"></span>Proxies<span class="count" id="nc-proxies">0</span></a>
+      <a class="nav-item tall" data-page="dotb"><span class="ico" data-icon="bolt"></span><span class="ni-txt">DotB<small id="nc-dotb-sub">—</small></span><span class="dot" id="nc-dotb"></span></a>
+      <a class="nav-item" data-page="extensions"><span class="ico" data-icon="puzzle"></span>Extensions<span class="count" id="nc-ext">0</span></a>
+    </nav>
+
+    <div class="nav-section">Données</div>
+    <nav>
+      <a class="nav-item" data-page="journal"><span class="ico" data-icon="list"></span>Journal</a>
+    </nav>
+
+    <div class="nav-section">Système</div>
+    <nav>
+      <a class="nav-item" data-page="settings"><span class="ico" data-icon="gear"></span>Paramètres</a>
+    </nav>
+
+    <div class="side-bottom">
+      <div class="side-status">
+        <span class="sdot ok"></span>
+        <div><div class="st-title">Compte</div><div class="st-sub link" id="open-gb">Groupe Barbaray</div></div>
+      </div>
+      <div class="side-status">
+        <span class="sdot" id="sd-relay"></span>
+        <div><div class="st-title">Relais proxy</div><div class="st-sub" id="st-relay">—</div></div>
+      </div>
+      <div class="side-status">
+        <span class="sdot" id="sd-browser"></span>
+        <div><div class="st-title">Navigateur</div><div class="st-sub" id="st-browser">—</div></div>
+      </div>
+      <div id="update-box"></div>
+      <div class="version" id="version">v2</div>
+    </div>
+  </aside>
+
+  <main id="main"></main>
+
+  <div id="modal-root"></div>
+  <div id="toast-root"></div>
+  <div id="menu-root"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

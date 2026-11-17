@@ -1,0 +1,8 @@
+{
+  "manifest_version": 3,
+  "name": "GB",
+  "version": "1.0",
+  "description": "Garde les onglets Vinted et DotB actifs (jamais mis en veille par l'économiseur de mémoire)",
+  "permissions": ["tabs"],
+  "background": { "service_worker": "sw.js" }
+}

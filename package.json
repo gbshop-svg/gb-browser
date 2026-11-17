@@ -1,0 +1,45 @@
+{
+  "name": "gb-browser",
+  "productName": "GB Browser",
+  "version": "2.6.0",
+  "description": "GB Browser - gestionnaire de profils anti-detect Groupe Barbaray (Brave isolé par compte Vinted, DotB intégré)",
+  "main": "src/main/index.js",
+  "author": "Groupe Barbaray",
+  "license": "UNLICENSED",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis",
+    "release": "electron-builder --win nsis --publish always"
+  },
+  "dependencies": {
+    "electron-updater": "6.3.9"
+  },
+  "devDependencies": {
+    "electron": "28.3.3",
+    "electron-builder": "24.13.3"
+  },
+  "build": {
+    "appId": "com.groupebarbaray.gbbrowser",
+    "productName": "GB Browser",
+    "artifactName": "GB-Browser-Setup-${version}.${ext}",
+    "directories": { "output": "dist" },
+    "files": ["src/**/*", "assets/**/*", "package.json"],
+    "asarUnpack": ["assets/**/*"],
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "GB Browser",
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
+      "deleteAppDataOnUninstall": false
+    },
+    "publish": [{ "provider": "github", "owner": "gbshop-svg", "repo": "gb-browser", "releaseType": "release" }]
+  }
+}
