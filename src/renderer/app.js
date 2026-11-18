@@ -231,6 +231,7 @@ function head(title, sub, actions = '') {
 }
 
 function avatar(p) {
+  if (p.sourcing) return `<div class="avatar avatar-src" title="Profil Sourcing SHEIN (nuit 00h–07h)"><img src="sourcing.png" alt="">${p.open ? '<span class="on"></span>' : ''}</div>`;
   return `<div class="avatar" style="background:${AV_COLORS[(p.num - 1) % AV_COLORS.length]}">${p.num}${p.open ? '<span class="on"></span>' : ''}</div>`;
 }
 const VINTED_ICON = 'https://www.vinted.fr/favicon.ico';
@@ -258,7 +259,7 @@ function minis(p) {
   return out.length ? `<span class="minis">${out.join('')}</span>` : '';
 }
 function profileCell(p, withVinted = false) {
-  return `<div class="pcell">${avatar(p)}<div><div class="pname">${esc(p.name)}${withVinted ? vintedChip(p) : ''}</div><div class="pmeta">${pcode(p.num)} · :${p.port}${withVinted ? minis(p) : ''}</div></div></div>`;
+  return `<div class="pcell">${avatar(p)}<div><div class="pname">${esc(p.name)}${p.sourcing ? '<span class="src-chip">Sourcing · nuit</span>' : (withVinted ? vintedChip(p) : '')}</div><div class="pmeta">${pcode(p.num)} · :${p.port}${withVinted ? minis(p) : ''}</div></div></div>`;
 }
 
 // ── Page Profils ─────────────────────────────────────

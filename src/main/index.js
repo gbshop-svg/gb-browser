@@ -492,10 +492,13 @@ async function iconFile() {
   return vintedIco;
 }
 async function applyTaskbarIcon(id) {
-  if (process.platform !== 'win32' || store.settings.vintedIcon === false) return;
+  if (process.platform !== 'win32') return;
   const p = findProfile(id), r = running.get(id);
   if (!p || !r || !r.child || !r.child.pid) return;
-  const ico = await iconFile();
+  // Profil Sourcing SHEIN : son propre logo (loupe + étiquette), même si le logo Vinted est désactivé
+  const srcIco = p.sourcing && fs.existsSync(assetPath('sourcing.ico')) ? assetPath('sourcing.ico') : null;
+  if (!srcIco && store.settings.vintedIcon === false) return;
+  const ico = srcIco || await iconFile();
   if (!ico) return;
   const b = browsers.detect(store.settings.browserPath);
   winicon.apply(r.child.pid, { ico, appId: `GB.Profil.${p.num}`, name: `${pcode(p)} ${p.name}`, cmd: b && b.path ? `"${b.path}" --user-data-dir="${p.dir}"` : '' });
@@ -2190,6 +2193,7 @@ function setupIPC() {
       log(`${pcode(p)} : profil Sourcing SHEIN (mode nuit 00h–07h)`, 'success');
       setTimeout(() => syncGbExtension().catch((e) => log(`Extension Groupe Barbaray : ${e.message}`, 'warn')), 1500);
     }
+    if ('sourcing' in data && running.has(p.id)) applyTaskbarIcon(p.id).catch(() => {});
     if (proxyChanged) {
       p.proxyTest = null;
       if (openSet.has(id)) log(`${pcode(p)} : nouveau proxy appliqué à la prochaine ouverture`, 'warn');

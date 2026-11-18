@@ -172,6 +172,9 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); c
 
 .pcell { display: flex; align-items: center; gap: 11px; }
 .avatar { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; font-weight: 700; color: #fff; font-size: 13px; flex-shrink: 0; position: relative; }
+.avatar-src { background: linear-gradient(135deg, #e2b55e, #9b8cff); padding: 0; overflow: visible; }
+.avatar-src img { width: 30px; height: 30px; border-radius: 8px; display: block; }
+.src-chip { margin-left: 6px; padding: 1px 7px; border-radius: 999px; font-size: 10.5px; font-weight: 700; color: #1a1626; background: linear-gradient(135deg, #e2b55e, #b9a6ff); vertical-align: 1px; }
 .avatar .on { position: absolute; right: -3px; bottom: -3px; width: 10px; height: 10px; border-radius: 50%; background: var(--green); border: 2px solid var(--panel); }
 .pname { font-weight: 700; font-size: 13.5px; }
 .pmeta { font-size: 11px; color: var(--text-3); font-family: Consolas, monospace; margin-top: 1px; }
