@@ -1407,38 +1407,38 @@ const ACTIONS = {
   'row-menu': (el) => {
     const p = prof(el.dataset.id);
     if (!p) return;
-    openMenu(el, [
-      { label: 'Modifier le profil', icon: 'edit', run: () => profileModal(p) },
+    // Menu court : l'essentiel. Le reste est rangé dans « Plus d'options… » (rien n'a été supprimé).
+    const startDotb = { label: 'Démarrer les automatisations DotB', icon: 'bolt', run: async () => {
+      if (!p.open) return toast('Ouvre le profil d’abord', 'err');
+      toast(`${pcode(p.num)} : démarrage des automatisations DotB…`);
+      const r = await gb.invoke('dotb:runAuto', p.id);
+      if (r && r.ok) toast('Automatisations DotB : voir le détail dans le Journal', 'ok'); else toast((r && r.error) || 'Erreur', 'err');
+    } };
+    const more = [
+      { header: 'Profil' },
       { label: 'Configurer le proxy', icon: 'globe', run: () => proxyModal(p) },
-      p.busy && p.busy.startsWith('Warm')
-        ? { label: 'Arrêter le warm', icon: 'square', run: () => gb.invoke('profile:warmStop', p.id) }
-        : { label: 'Lancer un warm', icon: 'flame', run: () => startWarm([p.id]) },
       { label: 'Vérifier la connexion Vinted', icon: 'check', run: async () => {
         toast(`${pcode(p.num)} : vérification…`);
         const r = await gb.invoke('profile:checkVinted', p.id);
         toast(r ? 'Vinted connecté' : r === false ? 'Vinted non connecté dans ce profil' : 'Vérification impossible', r ? 'ok' : 'err');
       } },
       { label: 'Ouvrir Groupe Barbaray ici', icon: 'home', run: () => gb.invoke('profile:openUrl', p.id, S.data.settings.gbUrl) },
-      { label: 'Fiche du compte (score, restrictions)', icon: 'shield', run: () => sheetModal(p) },
       p.prudenceOn ? { label: 'Lever la prudence', icon: 'check', run: () => gb.invoke('health:prudence', [p.id], 0) } : { label: 'Mettre en prudence 48 h', icon: 'alert', run: () => gb.invoke('health:prudence', [p.id], 48) },
       '-',
       { header: 'Automatisation' },
       { label: `${p.keepAlive ? '✓ ' : ''}Relancer s’il plante`, icon: 'refresh', run: () => gb.invoke('profile:update', p.id, { keepAlive: !p.keepAlive }) },
       { label: `${p.dotbAuto ? '✓ ' : ''}Démarrer DotB à chaque ouverture`, icon: 'bolt', run: () => gb.invoke('profile:update', p.id, { dotbAuto: !p.dotbAuto }) },
-      { label: 'Démarrer les automatisations DotB maintenant', icon: 'play', run: async () => {
-        if (!p.open) return toast('Ouvre le profil d’abord', 'err');
-        toast(`${pcode(p.num)} : démarrage des automatisations DotB…`);
-        const r = await gb.invoke('dotb:runAuto', p.id);
-        if (r && r.ok) toast('Automatisations DotB : voir le détail dans le Journal', 'ok'); else toast((r && r.error) || 'Erreur', 'err');
-      } },
+      { label: `${p.autoWarm ? '✓ ' : ''}Warm automatique chaque jour`, icon: 'clock', run: () => gb.invoke('profile:update', p.id, { autoWarm: !p.autoWarm }) },
+      planDay(p) && planDay(p) <= 7
+        ? { label: 'Arrêter le plan de chauffe', icon: 'flame', run: () => gb.invoke('profile:warmPlan', p.id, false) }
+        : { label: 'Lancer le plan de chauffe 7 jours', icon: 'flame', run: () => gb.invoke('profile:warmPlan', p.id, true) },
       { label: 'Diagnostic DotB (capture pour Claude)', icon: 'info', run: async () => {
         const r = await gb.invoke('dotb:diagnose', p.id);
         if (r && r.ok) toast('Diagnostic enregistré sur le Bureau, dossier GB-diagnostic-DotB', 'ok'); else toast((r && r.error) || 'Erreur', 'err');
       } },
-      planDay(p) && planDay(p) <= 7
-        ? { label: 'Arrêter le plan de chauffe', icon: 'flame', run: () => gb.invoke('profile:warmPlan', p.id, false) }
-        : { label: 'Lancer le plan de chauffe 7 jours', icon: 'flame', run: () => gb.invoke('profile:warmPlan', p.id, true) },
-      { label: `${p.autoWarm ? '✓ ' : ''}Warm automatique chaque jour`, icon: 'clock', run: () => gb.invoke('profile:update', p.id, { autoWarm: !p.autoWarm }) },
+      '-',
+      { header: 'Avancé' },
+      { label: 'Ouvrir (forcer)', icon: 'play', run: () => openProfiles([p.id], { force: true }) },
       { label: 'Nouvelle empreinte', icon: 'shield', run: () => { if (confirm('Générer une nouvelle empreinte pour ce profil ?\nÀ éviter sur un compte déjà actif : Vinted verrait « un autre appareil ».')) gb.invoke('profile:newFingerprint', p.id); } },
       ...(p.importSource ? [{ label: 'Recopier les cookies depuis la source', icon: 'download', run: async () => {
         toast(`${pcode(p.num)} : relecture des cookies (ferme Brave / Scalency avant)…`);
@@ -1448,10 +1448,17 @@ const ACTIONS = {
       } }] : []),
       { label: 'Importer des connexions', icon: 'upload', run: () => cookieImportModal(p.id) },
       { label: 'Ouvrir le dossier', icon: 'folder', run: () => gb.invoke('profile:folder', p.id) },
-      '-',
+    ];
+    openMenu(el, [
       p.open ? { label: 'Fermer', icon: 'square', run: () => gb.invoke('profile:close', [p.id]) }
         : { label: 'Ouvrir', icon: 'play', run: () => openProfiles([p.id]) },
-      { label: 'Ouvrir (forcer)', icon: 'play', run: () => openProfiles([p.id], { force: true }) },
+      p.busy && p.busy.startsWith('Warm')
+        ? { label: 'Arrêter le warm', icon: 'square', run: () => gb.invoke('profile:warmStop', p.id) }
+        : { label: 'Lancer un warm', icon: 'flame', run: () => startWarm([p.id]) },
+      startDotb,
+      { label: 'Fiche du compte', icon: 'shield', run: () => sheetModal(p) },
+      { label: 'Modifier le profil', icon: 'edit', run: () => profileModal(p) },
+      { label: 'Plus d’options…', icon: 'dots', run: () => setTimeout(() => openMenu(el, more), 0) },
       '-',
       { label: 'Supprimer', icon: 'trash', danger: true, run: () => {
         if (confirm(`Supprimer ${pcode(p.num)} « ${p.name} » ?\nSes cookies et données seront effacés définitivement.`)) gb.invoke('profile:delete', [p.id]);
