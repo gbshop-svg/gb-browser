@@ -972,10 +972,12 @@ function pageSettings() {
             <div><h3>Groupe Barbaray</h3><div class="hs">Liens utilisés par GB Browser.</div></div></div>
           <div class="card-body">
             <div class="field"><label>URL de l’app</label><input class="input mono" id="set-gb" value="${esc(s.gbUrl)}"></div>
+            <div class="field"><label>Clé GB Browser (site → Comptes & GB Browser)</label><input class="input mono" type="password" id="set-gbkey" placeholder="${s.hasGbKey ? 'Clé enregistrée — colle une nouvelle clé pour la remplacer' : 'gbk_…'}">
+              <div class="hint">${s.gbLink && s.gbLink.at ? (s.gbLink.ok ? `✅ Comptes envoyés au site ${new Date(s.gbLink.at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })} (toutes les 5 min)` : `⚠️ ${esc(s.gbLink.error || 'Envoi impossible')}`) : (s.hasGbKey ? 'Premier envoi dans un instant.' : 'Avec la clé, la santé de tes comptes s’affiche sur le site et dans le compte rendu du soir.')}</div></div>
             <div class="field"><label>Pages ouvertes au lancement d’un profil (une par ligne)</label><textarea class="input" id="set-starts" style="min-height:64px">${esc((s.startUrls || []).join('\n'))}</textarea>
               <div class="hint">Seules ces pages s’ouvrent : l’ancienne session n’est pas restaurée.</div></div>
           </div>
-          <div class="card-foot"><button class="btn primary" data-act="save-links">${ic('check')}Enregistrer</button></div>
+          <div class="card-foot"><button class="btn" data-act="gb-push">${ic('refresh')}Tester l’envoi</button><button class="btn primary" data-act="save-links">${ic('check')}Enregistrer</button></div>
         </div>
 
         <div class="card">
@@ -1579,10 +1581,14 @@ const ACTIONS = {
   },
   'save-links': async () => {
     const urls = $('#set-starts').value.split(/\r?\n/).map((x) => x.trim()).filter((x) => /^https?:\/\//.test(x));
-    await gb.invoke('settings:save', { gbUrl: $('#set-gb').value.trim() || 'https://app.groupebarbaray.com', startUrls: urls.length ? urls : ['https://www.vinted.fr/about?d=j#d=j', 'https://www.vinted.fr/'] });
-    delete S.drafts['set-gb']; delete S.drafts['set-starts'];
+    const key = $('#set-gbkey').value.trim();
+    if (key && !/^gbk_[0-9a-f]{32}_\d+_[\w-]{32}$/.test(key)) return toast('Clé GB Browser invalide : copie-la depuis le site (Comptes & GB Browser)', 'err');
+    await gb.invoke('settings:save', { gbUrl: $('#set-gb').value.trim() || 'https://app.groupebarbaray.com', startUrls: urls.length ? urls : ['https://www.vinted.fr/about?d=j#d=j', 'https://www.vinted.fr/'], ...(key ? { gbKey: key } : {}) });
+    delete S.drafts['set-gb']; delete S.drafts['set-starts']; delete S.drafts['set-gbkey'];
     toast('Enregistré', 'ok');
+    if (key) { const r = await gb.invoke('gb:push'); toast(r.ok ? 'Comptes envoyés au site ✅' : `Envoi impossible : ${r.error}`, r.ok ? 'ok' : 'err'); }
   },
+  'gb-push': async () => { const r = await gb.invoke('gb:push'); toast(r.ok ? 'Comptes envoyés au site ✅' : `Envoi impossible : ${r.error}`, r.ok ? 'ok' : 'err'); },
   'open-data': () => gb.invoke('app:openDataDir'),
   'ram-refresh': () => loadRam(),
   'ram-purge': async () => { toast('Libération de la RAM des profils ouverts…'); await gb.invoke('ram:purge'); setTimeout(loadRam, 3000); toast('RAM libérée (onglets Vinted et DotB gardés actifs)', 'ok'); },

@@ -146,7 +146,7 @@ function send(ch, data) {
 
 function publicState() {
   const b = browsers.detect(store.settings.browserPath);
-  const { dotbToken, ...settings } = store.settings;
+  const { dotbToken, gbKey, ...settings } = store.settings;
   return {
     profiles: store.profiles.map((p) => {
       const px = proxy.parseProxy(p.proxy);
@@ -175,7 +175,7 @@ function publicState() {
     dotbInstalling,
     dotbActivity: store.dotbActivity || {},
     dotbOverview: store.dotbOverview || null,
-    settings: { ...settings, hasDotbToken: !!dotbToken, systemDark: nativeTheme.shouldUseDarkColors },
+    settings: { ...settings, hasDotbToken: !!dotbToken, hasGbKey: !!gbKey, gbLink: gbLinkState, systemDark: nativeTheme.shouldUseDarkColors },
     browser: b,
     relays: [...running.values()].filter((r) => r.relay).length,
     logs,
@@ -1016,6 +1016,54 @@ function setupUpdater() {
   const check = () => { if (store.settings.autoUpdate !== false) updater.checkForUpdates().catch(() => {}); };
   setTimeout(check, 20000);
   setInterval(check, 6 * 3600e3);
+}
+
+// ── Liaison avec le site Groupe Barbaray : envoie l'état des comptes (page « Comptes & GB Browser ») ──
+let gbLinkState = { ok: null, at: null, error: null };
+function gbAccountsPayload() {
+  return store.profiles.filter((p) => !p.archived).map((p) => {
+    const h = computeHealth(p);
+    const ip = currentIp(p);
+    const px = proxy.parseProxy(p.proxy);
+    const lastR = [...(p.restrictions || [])].sort((a, b) => Date.parse(b.at) - Date.parse(a.at))[0];
+    const bridge = p.dotbAccountId ? bridgeState.get(p.dotbAccountId) ?? bridgeState.get(String(p.dotbAccountId)) : undefined;
+    return {
+      id: p.id, name: `${pcode(p)} ${p.name}`.trim(), num: p.num,
+      running: openSet.has(p.id),
+      vinted: p.vinted ? (p.vinted.logged === true ? 'oui' : p.vinted.logged === false ? 'non' : '?') : '?',
+      vintedLogin: (p.vinted && p.vinted.login) || null,
+      dotb: bridge === undefined ? null : !!bridge, dotbAuto: !!p.dotbAuto,
+      health: h.score, level: h.level, prudenceUntil: p.prudence ? p.prudence.until : null,
+      proxy: px ? proxy.label(px) : null, ip: typeof ip === 'string' && /\d/.test(ip) ? ip : null,
+      country: (p.ipHistory && p.ipHistory.length && p.ipHistory[p.ipHistory.length - 1].country) || null,
+      views: p.vstats ? p.vstats.views : null, items: p.vstats ? p.vstats.items : null, favourites: p.vstats ? p.vstats.favs : null,
+      publishedToday: p.dotbAccountId ? pubToday(p) : null,
+      restrictions: (p.restrictions || []).length, lastRestriction: lastR ? lastR.at : null,
+      notes: h.main || null,
+    };
+  });
+}
+async function gbPush(manual = false) {
+  const key = store.settings.gbKey, base = (store.settings.gbUrl || '').replace(/\/+$/, '');
+  if (!key || !base) return { ok: false, error: 'Clé ou adresse manquante' };
+  try {
+    const mem = os.totalmem(), free = os.freemem();
+    const res = await fetch(`${base}/api/gb/accounts`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+      body: JSON.stringify({ version: app.getVersion(), machine: os.hostname().slice(0, 40), ram: { used: Math.round((mem - free) / 1048576), total: Math.round(mem / 1048576) }, accounts: gbAccountsPayload() }),
+      signal: AbortSignal.timeout(15000),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(res.status === 401 ? 'Clé refusée par le site' : j.error || `Erreur ${res.status}`);
+    gbLinkState = { ok: true, at: new Date().toISOString(), error: null };
+    if (manual) log(`Groupe Barbaray : ${j.received} compte(s) envoyé(s) au site`, 'success');
+  } catch (e) {
+    const changed = gbLinkState.ok !== false;
+    gbLinkState = { ok: false, at: new Date().toISOString(), error: e.message };
+    if (manual || changed) log(`Groupe Barbaray : envoi impossible (${e.message})`, 'warn');
+  }
+  broadcast();
+  return gbLinkState;
 }
 
 // ── Surveillance DotB (pont hors ligne, nouvelles commandes) ──
@@ -2118,7 +2166,7 @@ function setupIPC() {
 
   // Paramètres
   handle('settings:save', (data = {}) => {
-    const allowed = ['browserPath', 'profilesDir', 'startUrl', 'gbUrl', 'theme', 'dotbToken', 'proxyTimeout', 'warmIntensity', 'closeWelcome', 'scalencyDir', 'startUrls', 'fpEnabled', 'notify', 'ecoRam', 'autoWarm', 'allow3pCookies', 'autoPrudence', 'memorySaver', 'autoUpdate', 'morningCheck', 'pubAlert'];
+    const allowed = ['browserPath', 'profilesDir', 'startUrl', 'gbUrl', 'theme', 'dotbToken', 'proxyTimeout', 'warmIntensity', 'closeWelcome', 'scalencyDir', 'startUrls', 'fpEnabled', 'notify', 'ecoRam', 'autoWarm', 'allow3pCookies', 'autoPrudence', 'memorySaver', 'autoUpdate', 'morningCheck', 'pubAlert', 'gbKey'];
     for (const k of allowed) if (k in data) store.settings[k] = data[k];
     if ('profilesDir' in data) {
       store.settings.profilesDir = data.profilesDir || DEFAULT_PROFILES_DIR;
@@ -2128,6 +2176,7 @@ function setupIPC() {
     save(); broadcast();
     return true;
   });
+  handle('gb:push', () => gbPush(true));
   handle('settings:pickBrowser', async () => {
     const r = await dialog.showOpenDialog(mainWindow, {
       title: 'Choisis brave.exe', properties: ['openFile'],
@@ -2167,6 +2216,8 @@ app.whenReady().then(() => {
   setTimeout(() => scheduler().catch(() => {}), 20000);
   setInterval(() => dotbWatch().catch(() => {}), 180000);
   setInterval(() => pubWatch().catch(() => {}), 300000);
+  setInterval(() => gbPush().catch(() => {}), 300000);
+  setTimeout(() => gbPush().catch(() => {}), 45000);
   setInterval(() => { if (store.settings.ecoRam !== false) purgeAll().catch(() => {}); }, 20 * 60e3);
   setTimeout(() => refreshRealIp().then(checkConflicts).catch(() => {}), 8000);
   setupUpdater();
