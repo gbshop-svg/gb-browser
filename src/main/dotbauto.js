@@ -71,28 +71,46 @@ async function startAutomations(cdp, { keys = ['likes', 'agent', 'orders', 'brid
   if (!ready) throw new Error('la page DotB ne s’affiche pas (es-tu connecté à DotB dans ce profil ?)');
   // DotB peut s'ouvrir sur une autre section (Dressing…) : on va sur « Automatisations » et on vérifie
   // que les cartes (Smart Agent v2, Bridge…) sont bien affichées avant de continuer.
-  const onAuto = `(${cardJs(/smart agent v2/i)})() || (${cardJs(/^bridge$/i)})()`;
-  for (let attempt = 0; attempt < 4 && !(await h.eval(`!!(${onAuto})`)); attempt++) {
-    if (attempt < 2) {
-      // Lien du menu : le plus petit élément dont le texte est exactement « Automatisations », puis son ancêtre cliquable
-      await h.clickEl(`() => {
-        const els = [...document.querySelectorAll('a,button,[role=tab],[role=menuitem],[role=link],li,div,span,p')]
-          .filter((el) => /^automatisations?$/i.test((el.innerText || '').trim()))
-          .sort((a, b) => a.innerText.length - b.innerText.length || a.querySelectorAll('*').length - b.querySelectorAll('*').length);
-        const el = els[0];
-        return el ? (el.closest('a,button,[role=tab],[role=menuitem],[role=link],li') || el) : null;
-      }`);
-    } else {
-      // Dernier recours : adresse directe de la section
-      const base = (pageUrl || DOTB_PAGE);
-      await cdp.send('Page.navigate', { url: base + (attempt === 2 ? '#/automations' : '#/automatisations') }, sessionId).catch(() => {});
-    }
-    await waitFor(h, `!!(${onAuto})`, 8000);
+  // On est sur « Automatisations » quand le texte VISIBLE de la page contient « Pause nocturne »
+  // (innerText ignore les sections cachées) ou qu'une vraie carte Smart Agent / Bridge est visible.
+  const onAuto = `(/pause nocturne/i.test(document.body.innerText) || !!(${cardJs(/smart agent v2/i)})() || !!(${cardJs(/^bridge$/i)})())`;
+  const navJs = (re) => `() => {
+    const re = ${re};
+    const vis = (el) => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
+    const txt = (el) => (el.innerText || '').replace(/\\s+/g, ' ').trim();
+    const strong = [...document.querySelectorAll('button, a, [role=tab], [role=menuitem], [role=link], [data-sidebar=menu-button]')]
+      .filter((el) => vis(el) && re.test(txt(el)));
+    if (strong.length) return strong[strong.length - 1];
+    const weak = [...document.querySelectorAll('li, div, span, p')]
+      .filter((el) => vis(el) && re.test(txt(el)) && getComputedStyle(el).cursor === 'pointer');
+    return weak[weak.length - 1] || null;
+  }`;
+  const jsClick = (finder) => h.eval(`(() => { const el = (${finder})(); if (!el) return false;
+    for (const t of ['pointerdown', 'mousedown', 'pointerup', 'mouseup']) el.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window }));
+    el.click(); return true; })()`);
+  const steps = [
+    ['clic souris « Automatisations »', () => h.clickEl(navJs(/^automatisations?$/i))],
+    ['clic direct « Automatisations »', () => jsClick(navJs(/^automatisations?$/i))],
+    ['ouverture du menu puis « Automatisations »', async () => {
+      await jsClick(`() => [...document.querySelectorAll('button')].find((b) => /^menu$/i.test((b.innerText || '').trim()))`);
+      await sleep(900);
+      return jsClick(navJs(/^automatisations?$/i));
+    }],
+    ['clic « Smart Agent v2 » du menu', () => jsClick(navJs(/^smart agent v2$/i))],
+    ['clic « Messages aux likes » du menu', () => jsClick(navJs(/^messages aux likes$/i))],
+    ['adresse #/automations', () => cdp.send('Page.navigate', { url: (pageUrl || DOTB_PAGE) + '#/automations' }, sessionId).then(() => true, () => false)],
+  ];
+  const tried = [];
+  for (const [label, run] of steps) {
+    if (await h.eval(onAuto)) break;
+    const ok = await run().catch(() => false);
+    tried.push(`${label} : ${ok ? 'fait' : 'élément absent'}`);
+    await waitFor(h, onAuto, 6000);
   }
-  if (!(await h.eval(`!!(${onAuto})`))) {
-    const menu = await h.eval(`[...document.querySelectorAll('a,button,[role=tab],[role=menuitem],nav li')].map((e) => (e.innerText || '').trim()).filter((t) => t && t.length < 30).slice(0, 25).join(' | ')`).catch(() => '');
-    log(`section Automatisations introuvable (menu vu : ${menu || 'rien'})`);
-  }
+  if (!(await h.eval(onAuto))) {
+    const seen = await h.eval(`(document.body.innerText || '').replace(/\\s+/g, ' ').slice(0, 300)`).catch(() => '');
+    log(`section Automatisations introuvable — essais : ${tried.join(' · ')} — page visible : ${seen}`);
+  } else if (tried.length) log(`DotB : section Automatisations ouverte (${tried[tried.length - 1].split(' : ')[0]})`);
   const results = {};
   for (const card of CARDS.filter((c) => keys.includes(c.key))) {
     const find = cardJs(card.title);
