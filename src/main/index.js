@@ -427,7 +427,8 @@ async function openProfile(id, { force = false, url = null, headless = false, no
   const locale = FP.localeFor(geo ? geo.countryCode : 'FR');
 
   // Pages à ouvrir : ouvertes par GB après la mise en place de l'empreinte
-  const pages = url ? [url] : p.startUrl ? [p.startUrl]
+  // Profil Sourcing SHEIN : il s'ouvre sur SHEIN, jamais sur Vinted
+  const pages = url ? [url] : p.startUrl ? [p.startUrl] : p.sourcing ? ['https://fr.shein.com/']
     : ((store.settings.startUrls && store.settings.startUrls.length) ? store.settings.startUrls : [store.settings.startUrl || 'https://www.vinted.fr/']);
   if (headless) { extra.push('--headless=new'); extra.push(url || 'about:blank'); }
   else { extra.push('about:blank'); prepareSession(p); }
@@ -1526,7 +1527,7 @@ async function vintedApiCheck(port) {
 
 async function refreshVinted(id) {
   const p = findProfile(id);
-  if (!p) return null;
+  if (!p || p.sourcing) return null; // profil Sourcing : pas de compte Vinted, on ne va pas sur Vinted
   try {
     let res = await vintedApiCheck(portOf(p)).catch(() => null);
     if (!res) {
@@ -1547,7 +1548,7 @@ async function refreshVinted(id) {
 // Vérifie un profil fermé en le lançant en arrière-plan (headless)
 async function checkVintedHeadless(id) {
   const p = findProfile(id);
-  if (!p) return null;
+  if (!p || p.sourcing) return null;
   if (await portAlive(portOf(p))) return refreshVinted(id);
   busy.set(id, 'Vérification Vinted…');
   broadcast();
