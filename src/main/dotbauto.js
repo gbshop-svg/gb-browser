@@ -14,16 +14,31 @@ const CARDS = [
 ];
 const RANGE_RE = /\b2\s*(h|heures?)\b|2 derni[eè]res heures|deux (derni[eè]res )?heures/i;
 
-// Trouve la carte d'une automatisation à partir de son titre (renvoie une fonction JS pour Human.clickEl)
+// Trouve la carte d'une automatisation (renvoie une fonction JS pour Human.clickEl).
+// On part des boutons d'action VISIBLES (Démarrer / Arrêter…) hors du menu latéral, et on remonte
+// jusqu'au plus petit bloc qui contient le titre — le menu de gauche contient aussi « Smart Agent v2 »,
+// « Messages aux likes »… et ne doit jamais être pris pour une carte.
+const ACTION_RE = /^(d[ée]marrer|arr[êe]ter|start|stop|connecter|d[ée]connecter|activer|lancer|pause)/i;
 const cardJs = (re) => `(() => {
   const re = ${re};
+  const act = ${ACTION_RE};
   const norm = (s) => (s || '').replace(/\\s+/g, ' ').trim();
-  const heads = [...document.querySelectorAll('h1,h2,h3,h4,h5,div,span,p')].filter((el) => el.children.length <= 2 && re.test(norm(el.textContent)) && norm(el.textContent).length < 60);
-  for (const h of heads) {
-    let n = h;
-    for (let i = 0; i < 8 && n; i++) { n = n.parentElement; if (n && n.querySelector('button')) return n; }
+  const vis = (el) => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
+  const isAct = (b) => vis(b) && act.test(norm(b.innerText)) && !b.closest('nav, aside, [role=navigation]');
+  let best = null;
+  for (const b of [...document.querySelectorAll('button')].filter(isAct)) {
+    let n = b;
+    for (let i = 0; i < 10 && n.parentElement; i++) {
+      n = n.parentElement;
+      if ([...n.querySelectorAll('button')].filter(isAct).length > 1) break; // on a dépassé la carte
+      const lines = (n.innerText || '').split('\\n').map(norm).filter(Boolean);
+      if (lines.some((l) => l.length < 60 && re.test(l))) {
+        if (!best || n.innerText.length < best.innerText.length) best = n;
+        break;
+      }
+    }
   }
-  return null;
+  return best;
 })`;
 
 async function openDotbTab(cdp, pageUrl = DOTB_PAGE) {
@@ -166,4 +181,4 @@ async function diagnose(cdp) {
   return { info, png: shot ? Buffer.from(shot.data, 'base64') : null };
 }
 
-module.exports = { startAutomations, stopAutomations, diagnose, DOTB_PAGE, DOTB_EXT_ID };
+module.exports = { cardJs, startAutomations, stopAutomations, diagnose, DOTB_PAGE, DOTB_EXT_ID };

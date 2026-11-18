@@ -62,7 +62,7 @@ const DEFAULT_SETTINGS = {
   dotbToken: '',
   theme: 'dark',
   proxyTimeout: 8,
-  warmIntensity: 'normal',
+  warmIntensity: 'court',
   closeWelcome: true,
   scalencyDir: process.platform === 'win32' ? 'C:\\Profiles' : '',
   fpEnabled: true,
@@ -108,6 +108,8 @@ function loadStore() {
   try { s = JSON.parse(fs.readFileSync(STORE_FILE, 'utf8')); } catch {}
   if (!s) s = { counter: 0, profiles: [], extensions: [], settings: {} };
   s.settings = { ...DEFAULT_SETTINGS, ...(s.settings || {}) };
+  // 2.8.5 : le warm « court » devient le réglage par défaut (une seule fois, l'utilisateur peut rechanger)
+  if (!s.settings.warmCourtV285) { s.settings.warmIntensity = 'court'; s.settings.warmCourtV285 = true; }
   s.extensions = s.extensions || [];
   // Migration v2.0 : réserve de proxies -> proxy par profil
   const pool = s.proxies || [];
@@ -332,6 +334,15 @@ function prepareSession(p) {
       const sh = ex.braveShields = ex.braveShields || {};
       const now = String(Date.now() * 1000 + 11644473600000000);
       for (const host of ['www.vinted.fr', 'vinted.fr', 'dotb.io', 'www.dotb.io']) sh[`*://${host}/*,*`] = { last_modified: now, setting: 2 };
+    }
+    // Boucliers coupés partout (option) : Brave se comporte comme un navigateur classique, rien n'est bloqué
+    // (cookies, pubs, mesures d'audience) — le warm récolte un maximum de cookies.
+    {
+      const cs = prefs.profile.content_settings = prefs.profile.content_settings || {};
+      const ex = cs.exceptions = cs.exceptions || {};
+      const sh = ex.braveShields = ex.braveShields || {};
+      if (store.settings.shieldsOffAll !== false) sh['*,*'] = { last_modified: String(Date.now() * 1000 + 11644473600000000), setting: 2 };
+      else delete sh['*,*'];
     }
     // Économiseur de mémoire de Brave : met en veille les onglets inactifs (sauf Vinted et DotB, protégés par l'extension GB)
     const ms = store.settings.memorySaver !== false ? 1 : 0;
@@ -636,11 +647,13 @@ const warmStops = new Set();
 async function warmProfile(id, { intensity: forced, closeAfter = false } = {}) {
   const p = findProfile(id);
   if (!p) return { ok: false, error: 'Profil introuvable' };
+  // DotB en train de démarrer dans ce profil : on attend qu'il ait fini (1 min 30 max) au lieu de refuser le warm.
+  for (let i = 0; i < 45 && String(busy.get(id) || '').startsWith('Démarrage DotB'); i++) await sleep(2000);
   if (busy.has(id)) return { ok: false, error: 'Une action est déjà en cours sur ce profil' };
   busy.set(id, 'Warm…');
   warmStops.delete(id);
   broadcast();
-  const intensity = forced || store.settings.warmIntensity || 'normal';
+  const intensity = forced || store.settings.warmIntensity || 'court';
   const wasOpen = await portAlive(portOf(p));
   log(`${pcode(p)} : warm lancé (${intensity})`);
   let c, pausedDotb = false;
@@ -2294,7 +2307,7 @@ function setupIPC() {
 
   // Paramètres
   handle('settings:save', (data = {}) => {
-    const allowed = ['browserPath', 'profilesDir', 'startUrl', 'gbUrl', 'theme', 'dotbToken', 'proxyTimeout', 'warmIntensity', 'closeWelcome', 'scalencyDir', 'startUrls', 'fpEnabled', 'notify', 'ecoRam', 'autoWarm', 'allow3pCookies', 'autoPrudence', 'memorySaver', 'autoUpdate', 'morningCheck', 'pubAlert', 'gbKey', 'vintedIcon', 'shieldsOffVinted', 'autoStart', 'nightlyRestart'];
+    const allowed = ['browserPath', 'profilesDir', 'startUrl', 'gbUrl', 'theme', 'dotbToken', 'proxyTimeout', 'warmIntensity', 'closeWelcome', 'scalencyDir', 'startUrls', 'fpEnabled', 'notify', 'ecoRam', 'autoWarm', 'allow3pCookies', 'autoPrudence', 'memorySaver', 'autoUpdate', 'morningCheck', 'pubAlert', 'gbKey', 'vintedIcon', 'shieldsOffVinted', 'autoStart', 'nightlyRestart', 'shieldsOffAll'];
     for (const k of allowed) if (k in data) store.settings[k] = data[k];
     if ('profilesDir' in data) {
       store.settings.profilesDir = data.profilesDir || DEFAULT_PROFILES_DIR;

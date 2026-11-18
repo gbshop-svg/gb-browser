@@ -938,6 +938,8 @@ function pageSettings() {
             <div class="toggle ${s.autoStart !== false ? 'on' : ''}" data-act="tg-setting" data-k="autoStart"></div></div>
           <div class="setrow"><div class="st"><b>Redémarrage de nuit (4 h)</b><span>Chaque nuit, les profils ouverts sont fermés puis rouverts un par un : la RAM repart à zéro, DotB et ses automatisations sont relancés. Évite les ralentissements après plusieurs jours.</span></div>
             <div class="toggle ${s.nightlyRestart !== false ? 'on' : ''}" data-act="tg-setting" data-k="nightlyRestart"></div></div>
+          <div class="setrow"><div class="st"><b>Boucliers Brave coupés partout</b><span>Brave ne bloque plus rien (cookies, pubs, traqueurs) sur aucun site : il se comporte comme un navigateur classique et le warm récolte un maximum de cookies. Attention : les pubs consomment un peu plus de données sur les proxys facturés au Go. Appliqué à la prochaine ouverture du profil.</span></div>
+            <div class="toggle ${s.shieldsOffAll !== false ? 'on' : ''}" data-act="tg-setting" data-k="shieldsOffAll"></div></div>
           <div class="setrow"><div class="st"><b>Boucliers Brave coupés sur Vinted</b><span>Sur vinted.fr (et DotB), Brave ne bloque rien et ne brouille pas l’empreinte : le site se comporte comme chez un acheteur normal. Les boucliers restent actifs sur les autres sites. Appliqué à la prochaine ouverture du profil.</span></div>
             <div class="toggle ${s.shieldsOffVinted !== false ? 'on' : ''}" data-act="tg-setting" data-k="shieldsOffVinted"></div></div>
           <div class="setrow"><div class="st"><b>Logo Vinted dans la barre des tâches</b><span>Chaque profil a son propre bouton dans la barre des tâches Windows, avec le logo Vinted et son nom (P001 Julia…) au lieu du lion Brave. Prend effet sur les profils ouverts dans les 15 s.</span></div>
@@ -960,7 +962,7 @@ function pageSettings() {
           <div class="card-head"><div class="hi" style="color:#f97316;background:rgba(249,115,22,.12)">${ic('flame')}</div>
             <div><h3>Warm</h3><div class="hs">Navigation humaine : leboncoin, Wikipédia, sites FR (cookies acceptés), puis une balade sur Vinted (recherches, annonces regardées, sans favori ni message).</div></div></div>
           <div class="setrow" style="border-top:none"><div class="st"><b>Durée</b><span>Court ≈ 2-3 min · Normal ≈ 5-8 min · Long ≈ 10-15 min</span></div>
-            <div class="seg">${['court', 'normal', 'long'].map((k) => `<span class="${(s.warmIntensity || 'normal') === k ? 'active' : ''}" data-warm="${k}">${k[0].toUpperCase() + k.slice(1)}</span>`).join('')}</div></div>
+            <div class="seg">${['court', 'normal', 'long'].map((k) => `<span class="${(s.warmIntensity || 'court') === k ? 'active' : ''}" data-warm="${k}">${k[0].toUpperCase() + k.slice(1)}</span>`).join('')}</div></div>
           <div class="setrow"><div class="st"><b>Plage horaire des warms automatiques</b><span>Warm quotidien et plan de chauffe 7 jours : à une heure au hasard dans cette plage.</span></div>
             <div class="hours"><input class="input" id="set-wfrom" type="number" min="0" max="23" value="${(s.autoWarm || {}).from ?? 9}"> h à <input class="input" id="set-wto" type="number" min="1" max="24" value="${(s.autoWarm || {}).to ?? 21}"> h <button class="btn sm" data-act="save-whours">OK</button></div></div>
           <div class="setrow"><div class="st"><b>Fermer les pages de bienvenue</b><span>Ferme les onglets de bienvenue de DotB et des extensions à l’ouverture d’un profil.</span></div>
@@ -1367,7 +1369,7 @@ async function saveAccount(markCreated) {
   toast(markCreated ? 'Compte enregistré — prêt dans 24 h' : 'Compte enregistré', 'ok');
 }
 async function startWarm(ids) {
-  const len = { court: '2-3', normal: '5-8', long: '10-15' }[S.data.settings.warmIntensity || 'normal'];
+  const len = { court: '2-3', normal: '5-8', long: '10-15' }[S.data.settings.warmIntensity || 'court'];
   toast(`Warm lancé sur ${ids.length} profil(s) — environ ${len} min chacun. Ne touche pas à la fenêtre du warm.`);
   if (ids.length === 1) {
     const r = await gb.invoke('profile:warm', ids[0]);
