@@ -12,7 +12,16 @@ const CARDS = [
   { key: 'orders', title: /flux de commandes?/i, label: 'Flux de commandes' },
   { key: 'bridge', title: /^bridge$/i, label: 'Bridge' },
 ];
-const RANGE_RE = /\b2\s*(h|heures?)\b|2 derni[eè]res heures|deux (derni[eè]res )?heures/i;
+const RANGE_2H = /\b2\s*(h|heures?)\b|2 derni[eè]res heures|deux (derni[eè]res )?heures/i;
+// Plage « traiter les messages / notifications de… » choisie dans GB Browser (Paramètres → DotB).
+const RANGES = {
+  new: /uniquement les nouve|seulement les nouve|only new/i,
+  '2h': /\b2\s*(derni[eè]res?\s*)?(h|heures?|hours?)\b|deux (derni[eè]res )?heures/i,
+  '24h': /\b24\s*(derni[eè]res?\s*)?(h|heures?|hours?)\b|derni[eè]res 24|\b1\s*(dernier\s*)?(jour|day)\b|dernier jour|last day/i,
+  '3d': /\b3\s*(derniers?\s*)?(j|jours?|days?)\b|trois (derniers )?jours/i,
+  '7d': /\b7\s*(derniers?\s*)?(j|jours?|days?)\b|semaine|week/i,
+};
+const RANGE_LABELS = { new: 'nouveaux uniquement', '2h': '2 h', '24h': '24 h', '3d': '3 jours', '7d': '7 jours' };
 
 // Trouve la carte d'une automatisation (renvoie une fonction JS pour Human.clickEl).
 // On part des boutons d'action VISIBLES (Démarrer / Arrêter…) hors du menu latéral, et on remonte
@@ -64,7 +73,9 @@ async function waitFor(h, js, ms = 20000) {
 }
 
 // Démarre les automatisations demandées. Renvoie un résumé par carte.
-async function startAutomations(cdp, { keys = ['likes', 'agent', 'orders', 'bridge'], log = () => {}, pageUrl } = {}) {
+async function startAutomations(cdp, { keys = ['likes', 'agent', 'orders', 'bridge'], log = () => {}, pageUrl, range = '2h' } = {}) {
+  const RANGE_RE = RANGES[range] || RANGE_2H;
+  const rangeLabel = RANGE_LABELS[range] || '2 h';
   const { sessionId } = await openDotbTab(cdp, pageUrl);
   const h = new Human(cdp, sessionId);
   const ready = await waitFor(h, `!!document.body && /automatisations/i.test(document.body.innerText) && document.querySelectorAll('button').length > 3`, 25000);
@@ -115,7 +126,7 @@ async function startAutomations(cdp, { keys = ['likes', 'agent', 'orders', 'brid
   for (const card of CARDS.filter((c) => keys.includes(c.key))) {
     const find = cardJs(card.title);
     if (!(await h.eval(`!!${find}()`))) { results[card.key] = 'introuvable'; continue; }
-    // 1) Plage horaire : « traiter uniquement … 2 h »
+    // 1) Plage horaire : « traiter … » selon le réglage (2 h, 24 h, 3 jours…)
     const hasCombo = await h.eval(`(() => { const c = ${find}(); return !!(c && c.querySelector('[role=combobox], select, button[aria-haspopup]')); })()`);
     if (hasCombo) {
       const isNative = await h.eval(`(() => { const c = ${find}(); return !!(c && c.querySelector('select')); })()`);
@@ -131,7 +142,7 @@ async function startAutomations(cdp, { keys = ['likes', 'agent', 'orders', 'brid
           const ok = await h.clickEl(`() => [...document.querySelectorAll('[role=option], [role=menuitem], [role=menuitemradio]')].find((o) => ${RANGE_RE}.test(o.innerText))`);
           if (!ok) {
             await h.key('Escape', 'Escape', 27);
-            log(`${card.label} : option « 2 h » introuvable (choix : ${options.join(' | ') || 'aucun'})`);
+            log(`${card.label} : option « ${rangeLabel} » introuvable (choix : ${options.join(' | ') || 'aucun'})`);
           }
           await sleep(600);
         }

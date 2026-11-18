@@ -1,7 +1,7 @@
 {
   "name": "gb-browser",
   "productName": "GB Browser",
-  "version": "2.8.9",
+  "version": "2.9.1",
   "description": "GB Browser - gestionnaire de profils anti-detect Groupe Barbaray (Brave isolé par compte Vinted, DotB intégré)",
   "main": "src/main/index.js",
   "author": "Groupe Barbaray",
@@ -22,11 +22,26 @@
     "appId": "com.groupebarbaray.gbbrowser",
     "productName": "GB Browser",
     "artifactName": "GB-Browser-Setup-${version}.${ext}",
-    "directories": { "output": "dist" },
-    "files": ["src/**/*", "assets/**/*", "package.json"],
-    "asarUnpack": ["assets/**/*"],
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "assets/**/*"
+    ],
     "win": {
-      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
       "icon": "assets/icon.ico"
     },
     "nsis": {
@@ -40,6 +55,13 @@
       "uninstallerIcon": "assets/icon.ico",
       "deleteAppDataOnUninstall": false
     },
-    "publish": [{ "provider": "github", "owner": "gbshop-svg", "repo": "gb-browser", "releaseType": "release" }]
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "gbshop-svg",
+        "repo": "gb-browser",
+        "releaseType": "release"
+      }
+    ]
   }
 }

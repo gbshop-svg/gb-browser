@@ -73,7 +73,10 @@ const DEFAULT_SETTINGS = {
   autoUpdate: true,
   morningCheck: { enabled: true, hour: 8 },
   autoStart: true,          // GB Browser se lance avec Windows et rouvre les profils
-  nightlyRestart: true,     // redémarrage des profils ouverts chaque nuit vers 4 h (RAM)
+  nightlyRestart: true,
+  nightShein: true,         // 00h–07h : comptes Vinted fermés, profil « Sourcing SHEIN » ouvert (si un profil est marqué Sourcing)
+  autoRaise: true,
+  dotbRange: '2h',          // messages / likes traités par DotB : new | 2h | 24h | 3d | 7d          // monte le prix des annonces Vinted en ligne quand SHEIN augmente (8h–21h)     // redémarrage des profils ouverts chaque nuit vers 4 h (RAM)
   pubAlert: { normal: 40, fragile: 15 },
   autoPrudence: true,
   autoWarm: { from: 9, to: 21 },
@@ -396,9 +399,10 @@ async function openProfile(id, { force = false, url = null, headless = false, no
 
   // Extensions
   const disableFeatures = [];
+  if (p.sourcing) noDotb = true; // profil Sourcing SHEIN : pas de DotB
   if (noDotb) noDotbSessions.add(id); else noDotbSessions.delete(id);
   if (headless) headlessIds.add(id); else headlessIds.delete(id);
-  const extPaths = store.extensions.filter((e) => e.enabled && fs.existsSync(e.path) && !(noDotb && e.webstoreId === DOTB_EXT_ID)).map((e) => e.path);
+  const extPaths = store.extensions.filter((e) => e.enabled && fs.existsSync(e.path) && !(noDotb && e.webstoreId === DOTB_EXT_ID) && (!e.gbSourcing || p.sourcing)).map((e) => e.path);
   if (store.settings.memorySaver !== false && !headless) extPaths.push(assetPath('gb-helper'));
   if (extPaths.length) {
     extra.push(`--load-extension=${extPaths.join(',')}`);
@@ -558,7 +562,7 @@ async function runDotbAuto(id, { force = false } = {}) {
   broadcast();
   const c = await CDP.forPort(portOf(p));
   try {
-    const res = await dotbauto.startAutomations(c, { log: (m) => log(`${pcode(p)} DotB · ${m}`, 'warn') });
+    const res = await dotbauto.startAutomations(c, { log: (m) => log(`${pcode(p)} DotB · ${m}`, 'warn'), range: store.settings.dotbRange || '2h' });
     const txt = Object.entries(res).map(([k, v]) => `${{ likes: 'Likes', agent: 'Smart Agent', orders: 'Commandes', bridge: 'Bridge' }[k]} : ${v}`).join(' · ');
     const bad = Object.values(res).some((v) => !/démarré|déjà actif/.test(v));
     log(`${pcode(p)} automatisations DotB — ${txt}`, bad ? 'warn' : 'success');
@@ -732,10 +736,10 @@ let schedulerBusy = false;
 // ── Redémarrage de nuit : chaque profil ouvert est fermé puis rouvert (RAM remise à zéro, DotB relancé) ──
 let nightlyRunning = false;
 async function nightlyRestart() {
-  if (nightlyRunning) return;
+  if (nightlyRunning || nightOn()) return; // mode nuit SHEIN : les comptes sont déjà fermés de 00h à 07h
   nightlyRunning = true;
   try {
-    const ids = [...openSet].filter((id) => visible.has(id) && !busy.has(id) && !noDotbSessions.has(id));
+    const ids = [...openSet].filter((id) => visible.has(id) && !busy.has(id) && !noDotbSessions.has(id) && !(findProfile(id) || {}).sourcing);
     if (!ids.length) return;
     log(`Redémarrage de nuit de ${ids.length} profil(s), un par un`, 'info');
     for (const id of ids) {
@@ -756,7 +760,15 @@ function applyAutoStart() {
   try { app.setLoginItemSettings({ openAtLogin: store.settings.autoStart !== false, args: ['--autostart'] }); } catch {}
 }
 async function reopenAfterBoot() {
-  const ids = (store.keepOpen || []).filter((id) => findProfile(id));
+  if (nightOn() && inNight()) {
+    // en pleine nuit : seulement le profil Sourcing ; les comptes Vinted rouvriront à 07h
+    store.nightClosed = [...new Set([...(store.nightClosed || []), ...(store.keepOpen || []).filter((id) => !(findProfile(id) || {}).sourcing)])];
+    store.nightStartedDay = today(); save();
+    const sp = sourcingProfile();
+    if (sp && !openSet.has(sp.id)) await openProfile(sp.id, { url: 'https://fr.shein.com/' }).catch(() => {});
+    return;
+  }
+  const ids = (store.keepOpen || []).filter((id) => findProfile(id) && !findProfile(id).sourcing);
   if (!ids.length) return;
   log(`Démarrage avec Windows : réouverture de ${ids.length} profil(s)`, 'info');
   for (const id of ids) {
@@ -766,12 +778,230 @@ async function reopenAfterBoot() {
   }
 }
 
+// ══════════════════════════════════════════════════════
+// MODE NUIT SHEIN (00h–07h) — DotB est en pause nocturne
+// 00h : les comptes Vinted ouverts sont fermés (et retenus), le profil « Sourcing SHEIN » s'ouvre :
+//       l'extension Groupe Barbaray y vérifie les prix et source les manques.
+// 07h : le profil Sourcing se ferme, les comptes Vinted rouvrent un par un (DotB relancé).
+// ══════════════════════════════════════════════════════
+const NIGHT_FROM = 0, NIGHT_TO = 7;
+const sourcingProfile = () => store.profiles.find((p) => p.sourcing && !p.closedByVinted);
+const nightOn = () => store.settings.nightShein !== false && !!sourcingProfile();
+const inNight = () => { const h = new Date().getHours(); return h >= NIGHT_FROM && h < NIGHT_TO; };
+let nightRunning = false;
+
+async function nightStart() {
+  if (nightRunning) return;
+  nightRunning = true;
+  try {
+    const sp = sourcingProfile();
+    const ids = [...openSet].filter((id) => visible.has(id) && !headlessIds.has(id) && !(findProfile(id) || {}).sourcing);
+    store.nightClosed = [...new Set([...(store.nightClosed || []), ...ids])];
+    save();
+    log(`🌙 Mode nuit : fermeture de ${ids.length} compte(s) Vinted, ouverture du profil Sourcing SHEIN`, 'info');
+    for (const id of ids) { await closeProfile(id, { quiet: true, keepInList: true }).catch(() => {}); await sleep(2500); }
+    if (sp && !openSet.has(sp.id)) {
+      await sleep(5000);
+      const r = await openProfile(sp.id, { url: 'https://fr.shein.com/' });
+      if (!r.ok) { log(`🌙 Profil Sourcing : ouverture impossible — ${r.error}`, 'error'); notify('Mode nuit', `Le profil Sourcing ne s’ouvre pas : ${r.error}`); }
+    }
+  } finally { nightRunning = false; }
+}
+
+async function nightEnd() {
+  if (nightRunning) return;
+  nightRunning = true;
+  try {
+    const sp = sourcingProfile();
+    if (sp && openSet.has(sp.id)) { await closeProfile(sp.id, { quiet: true }).catch(() => {}); await sleep(5000); }
+    const ids = (store.nightClosed && store.nightClosed.length ? store.nightClosed : (store.keepOpen || []))
+      .filter((id) => findProfile(id) && !findProfile(id).sourcing);
+    log(`☀️ Fin de nuit : réouverture de ${ids.length} compte(s) Vinted`, 'info');
+    for (const id of ids) {
+      if (openSet.has(id) || launching.has(id)) continue;
+      await openProfile(id).catch(() => {});
+      await sleep(25000); // un par un : DotB démarre dans chacun
+    }
+    store.nightClosed = [];
+    save();
+  } finally { nightRunning = false; }
+}
+
+// ── Page DotB au premier plan : c'est elle qui empêche Brave de mettre les onglets en veille ──
+const dotbHidden = new Map();
+async function bringDotbFront(c) {
+  const { targetInfos } = await c.send('Target.getTargets');
+  const t = targetInfos.find((x) => x.type === 'page' && x.url.startsWith(dotbauto.DOTB_PAGE.split('?')[0]));
+  if (!t) return false;
+  const { sessionId } = await c.send('Target.attachToTarget', { targetId: t.targetId, flatten: true });
+  await c.send('Page.bringToFront', {}, sessionId).catch(() => {});
+  await c.send('Target.detachFromTarget', { sessionId }).catch(() => {});
+  return true;
+}
+async function keepDotbFront() {
+  if (nightOn() && inNight()) return;
+  for (const id of [...openSet]) {
+    const p = findProfile(id);
+    if (!p || !p.dotbAuto || p.sourcing || !p.dotbStartedAt || busy.has(id) || noDotbSessions.has(id) || !visible.has(id)) continue;
+    let c;
+    try {
+      c = await CDP.forPort(portOf(p));
+      const { targetInfos } = await c.send('Target.getTargets');
+      const t = targetInfos.find((x) => x.type === 'page' && x.url.startsWith(dotbauto.DOTB_PAGE.split('?')[0]));
+      if (!t) { dotbHidden.delete(id); continue; }
+      const { sessionId } = await c.send('Target.attachToTarget', { targetId: t.targetId, flatten: true });
+      const r = await c.send('Runtime.evaluate', { expression: 'document.visibilityState', returnByValue: true }, sessionId).catch(() => null);
+      const hidden = !!(r && r.result && r.result.value === 'hidden');
+      if (hidden) {
+        const n = (dotbHidden.get(id) || 0) + 1;
+        dotbHidden.set(id, n);
+        if (n >= 2) { // cachée depuis ~10 min : on la remet devant
+          await c.send('Page.bringToFront', {}, sessionId).catch(() => {});
+          dotbHidden.delete(id);
+          log(`${pcode(p)} : page DotB remise au premier plan`, 'info');
+        }
+      } else dotbHidden.delete(id);
+      await c.send('Target.detachFromTarget', { sessionId }).catch(() => {});
+    } catch { /* profil occupé ou fermé */ } finally { if (c) c.close(); }
+  }
+}
+
+// ══════════════════════════════════════════════════════
+// HAUSSE DES PRIX VINTED (annonces déjà en ligne) — quand SHEIN augmente
+// Le site prépare la liste ; GB l'applique de 8h à 21h, dans le bon profil, au calme :
+// 3 par passage max, 6 par compte et par jour, jamais de baisse, jamais plus de +35 %.
+// ══════════════════════════════════════════════════════
+let raising = false;
+function raisesToday() {
+  const d = today();
+  if (store.raiseDay !== d) { store.raiseDay = d; store.raiseCount = {}; }
+  return store.raiseCount;
+}
+async function raiseTick() {
+  if (raising || store.settings.autoRaise === false) return;
+  const key = store.settings.gbKey, base = (store.settings.gbUrl || '').replace(/\/+$/, '');
+  if (!key || !base) return;
+  const h = new Date().getHours();
+  if (h < 8 || h >= 21 || (nightOn() && inNight())) return;
+  raising = true;
+  try {
+    const res = await fetch(`${base}/api/gb/price-raises`, { headers: { Authorization: `Bearer ${key}` } });
+    if (!res.ok) return;
+    const { raises = [] } = await res.json();
+    let done = 0;
+    for (const r of raises) {
+      if (done >= 3) break;
+      const p = store.profiles.find((x) => r.dotbAccountId && String(x.dotbAccountId) === String(r.dotbAccountId));
+      if (!p || p.sourcing || !openSet.has(p.id) || busy.has(p.id) || prudenceActive(p)) continue;
+      if (!p.dotbStartedAt || Date.now() - Date.parse(p.dotbStartedAt) < 10 * 60e3) continue; // DotB d'abord
+      const cnt = raisesToday();
+      if ((cnt[p.id] || 0) >= 6) continue;
+      const out = await vintedRaisePrice(p, r).catch((e) => ({ ok: false, note: e.message }));
+      cnt[p.id] = (cnt[p.id] || 0) + 1;
+      save();
+      log(`${pcode(p)} : prix Vinted « ${String(r.title).slice(0, 40)} » — ${out.ok ? `${out.before ?? '?'} € → ${r.to} €` : out.skipped ? `inchangé (${out.note})` : `échec (${out.note})`}`, out.ok ? 'success' : out.skipped ? 'info' : 'warn');
+      await fetch(`${base}/api/gb/price-raises`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+        body: JSON.stringify({ id: r.id, ...out }),
+      }).catch(() => {});
+      done++;
+      await sleep(rand(60e3, 150e3));
+    }
+  } catch { /* site injoignable : on réessaiera */ } finally { raising = false; }
+}
+
+async function vintedRaisePrice(p, r) {
+  busy.set(p.id, 'Prix Vinted…');
+  broadcast();
+  const c = await CDP.forPort(portOf(p));
+  let targetId = null;
+  try {
+    ({ targetId } = await c.send('Target.createTarget', { url: 'about:blank' }));
+    managedTargets.add(targetId);
+    const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
+    await c.send('Page.enable', {}, sessionId).catch(() => {});
+    await c.send('Page.bringToFront', {}, sessionId).catch(() => {}); // les clics ne passent pas sur un onglet caché
+    const h = new warm.Human(c, sessionId);
+    await h.goto(process.env.GB_TEST_EDIT_URL || `https://www.vinted.fr/items/${Number(r.vintedId)}/edit`);
+    await h.waitLoad(20000);
+    const FIND = `() => document.querySelector('input[name="price"], input#price, input[data-testid*="price" i], [data-testid*="price" i] input')`;
+    let found = false;
+    for (let i = 0; i < 20 && !found; i++) { found = !!(await h.eval(`!!(${FIND})()`)); if (!found) await sleep(700); }
+    if (!found) {
+      const url = String(await h.url() || '');
+      return { ok: false, note: /\/edit/.test(url) ? 'champ prix introuvable sur la page de modification' : `page de modification refusée (${url.slice(0, 70)})` };
+    }
+    const cur = String(await h.eval(`(${FIND})().value`) || '');
+    const curN = parseFloat(cur.replace(/[^\d,.]/g, '').replace(',', '.'));
+    if (Number.isFinite(curN) && curN >= r.to - 0.001) return { ok: false, skipped: true, note: `déjà à ${curN} €`, before: curN };
+    if (Number.isFinite(curN) && r.to > curN * 1.35) return { ok: false, skipped: true, note: `hausse trop forte (${curN} → ${r.to} €)`, before: curN };
+    const txt = (cur.includes(',') ? r.to.toFixed(2).replace('.', ',') : r.to.toFixed(2)).replace(/[.,]00$/, '');
+    await h.clickEl(FIND);
+    await sleep(rand(300, 650));
+    await h.eval(`(() => { const el = (${FIND})(); el.focus(); el.select(); })()`);
+    await h.key('Backspace', 'Backspace', 8);
+    await sleep(rand(250, 500));
+    await h.type(txt);
+    await sleep(rand(700, 1300));
+    const typed = parseFloat(String(await h.eval(`(${FIND})().value`) || '').replace(',', '.'));
+    if (Math.abs(typed - r.to) > 0.001) {
+      // la frappe n'a pas pris : on remplit le champ comme le ferait le navigateur
+      await h.eval(`(() => { const el = (${FIND})(); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+        set.call(el, ${JSON.stringify(txt)}); el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+      await sleep(500);
+    }
+    await h.eval(`(${FIND})().blur()`);
+    await sleep(rand(600, 1200));
+    const SUBMIT = `() => [...document.querySelectorAll('button, [role=button]')].filter((b) => b.offsetParent && !b.disabled)
+      .find((b) => /upload-form-save|save-button|submit/i.test(b.getAttribute('data-testid') || '') || b.type === 'submit' && !/brouillon|draft|supprimer|annuler/i.test(b.innerText)
+        || /^(enregistrer|sauvegarder|mettre à jour|valider|save)/i.test((b.innerText || '').trim()) && !/brouillon|draft/i.test(b.innerText))`;
+    if (!(await h.clickEl(SUBMIT))) return { ok: false, note: 'bouton « Enregistrer » introuvable', before: curN };
+    for (let i = 0; i < 25; i++) {
+      await sleep(800);
+      const u = String(await h.url() || '');
+      if (!/\/edit/.test(u)) return { ok: true, before: Number.isFinite(curN) ? curN : undefined, after: r.to };
+    }
+    const err = await h.eval(`[...document.querySelectorAll('[class*="error" i], [role=alert]')].map((e) => e.innerText.trim()).filter(Boolean).join(' | ').slice(0, 150)`).catch(() => '');
+    return { ok: false, note: `enregistrement non confirmé${err ? ` : ${err}` : ''}`, before: curN };
+  } finally {
+    if (targetId) await c.send('Target.closeTarget', { targetId }).catch(() => {});
+    await sleep(800);
+    await bringDotbFront(c).catch(() => {});
+    c.close();
+    busy.delete(p.id);
+    broadcast();
+  }
+}
+
+// ── Extension Groupe Barbaray : installée et mise à jour toute seule pour le profil Sourcing ──
+async function syncGbExtension() {
+  const key = store.settings.gbKey, base = (store.settings.gbUrl || '').replace(/\/+$/, '');
+  if (!key || !base || !sourcingProfile()) return;
+  const auth = { headers: { Authorization: `Bearer ${key}` } };
+  const v = await fetch(`${base}/api/gb/extension?v=1`, auth).then((x) => (x.ok ? x.json() : null)).catch(() => null);
+  if (!v || !v.version) return;
+  let rec = store.extensions.find((e) => e.gbSourcing);
+  if (rec && rec.version === v.version && fs.existsSync(rec.path)) return;
+  const res = await fetch(`${base}/api/gb/extension`, auth);
+  if (!res.ok) return;
+  rec = await installExtension(Buffer.from(await res.arrayBuffer()), { source: 'groupe-barbaray', existing: rec });
+  rec.gbSourcing = true;
+  // « Mode nuit » coché d'office dans ce profil (l'extension lit ce fichier)
+  try { fs.writeFileSync(path.join(rec.path, 'gb-night.json'), JSON.stringify({ nightMode: true })); } catch {}
+  save(); broadcast();
+  log(`Extension Groupe Barbaray ${rec.version} prête pour le profil Sourcing (prise en compte à sa prochaine ouverture)`, 'success');
+}
+
 async function scheduler() {
   if (schedulerBusy) return;
   schedulerBusy = true;
   try {
     const now = Date.now();
     const d = today();
+    if (nightOn() && !nightRunning) {
+      if (inNight() && store.nightStartedDay !== d) { store.nightStartedDay = d; save(); nightStart().catch((e) => log(`Mode nuit : ${e.message}`, 'error')); }
+      else if (new Date().getHours() >= NIGHT_TO && store.nightStartedDay === d && store.nightEndedDay !== d) { store.nightEndedDay = d; save(); nightEnd().catch((e) => log(`Fin de nuit : ${e.message}`, 'error')); }
+    }
     if (store.settings.nightlyRestart !== false && store.lastNightly !== d && new Date().getHours() === 4) {
       store.lastNightly = d; save();
       nightlyRestart().catch(() => {});
@@ -803,7 +1033,7 @@ async function scheduler() {
         log(`${pcode(p)} : plan de chauffe 7 jours terminé`, 'success');
       }
       const inPlan = day && day <= PLAN_DAYS;
-      if (!p.autoWarm && !inPlan) continue;
+      if (p.sourcing || (!p.autoWarm && !inPlan)) continue;
       if (p.lastWarm && p.lastWarm.slice(0, 10) === d) continue;
       if (!p.nextWarmAt || p.nextWarmAt.slice(0, 10) !== d) { p.nextWarmAt = pickWarmTime(d); save(); }
       if (now < Date.parse(p.nextWarmAt) || busy.has(p.id)) continue;
@@ -1219,7 +1449,7 @@ async function dotbWatch() {
       const prev = bridgeState.get(a.id);
       bridgeState.set(a.id, on);
       const prof = store.profiles.find((p) => String(p.dotbAccountId) === String(a.id));
-      if (prev === true && !on && prof) {
+      if (prev === true && !on && prof && !(nightOn() && inNight())) {
         log(`${pcode(prof)} : DotB hors ligne (${a.login || a.id})`, 'warn');
         notify('DotB hors ligne', `${pcode(prof)} ${prof.name} (${a.login || ''}) : l’extension ne répond plus.`);
       }
@@ -1927,7 +2157,7 @@ function handle(ch, fn) {
   });
 }
 
-const PROFILE_FIELDS = ['name', 'notes', 'tags', 'status', 'proxy', 'dotbAccountId', 'dotbAccountLabel', 'startUrl', 'keepAlive', 'dotbAuto', 'autoWarm'];
+const PROFILE_FIELDS = ['name', 'notes', 'tags', 'status', 'proxy', 'dotbAccountId', 'dotbAccountLabel', 'startUrl', 'keepAlive', 'dotbAuto', 'autoWarm', 'sourcing'];
 
 function setupIPC() {
   handle('gb:state', () => publicState());
@@ -1953,6 +2183,13 @@ function setupIPC() {
     if (!p) return null;
     const proxyChanged = 'proxy' in data && data.proxy !== p.proxy;
     for (const k of PROFILE_FIELDS) if (k in data) p[k] = data[k];
+    if (data.sourcing) {
+      // un seul profil Sourcing ; DotB jamais lancé dedans ; l'extension Groupe Barbaray s'installe toute seule
+      for (const o of store.profiles) if (o.id !== p.id && o.sourcing) o.sourcing = false;
+      p.dotbAuto = false;
+      log(`${pcode(p)} : profil Sourcing SHEIN (mode nuit 00h–07h)`, 'success');
+      setTimeout(() => syncGbExtension().catch((e) => log(`Extension Groupe Barbaray : ${e.message}`, 'warn')), 1500);
+    }
     if (proxyChanged) {
       p.proxyTest = null;
       if (openSet.has(id)) log(`${pcode(p)} : nouveau proxy appliqué à la prochaine ouverture`, 'warn');
@@ -2307,7 +2544,7 @@ function setupIPC() {
 
   // Paramètres
   handle('settings:save', (data = {}) => {
-    const allowed = ['browserPath', 'profilesDir', 'startUrl', 'gbUrl', 'theme', 'dotbToken', 'proxyTimeout', 'warmIntensity', 'closeWelcome', 'scalencyDir', 'startUrls', 'fpEnabled', 'notify', 'ecoRam', 'autoWarm', 'allow3pCookies', 'autoPrudence', 'memorySaver', 'autoUpdate', 'morningCheck', 'pubAlert', 'gbKey', 'vintedIcon', 'shieldsOffVinted', 'autoStart', 'nightlyRestart', 'shieldsOffAll'];
+    const allowed = ['browserPath', 'profilesDir', 'startUrl', 'gbUrl', 'theme', 'dotbToken', 'proxyTimeout', 'warmIntensity', 'closeWelcome', 'scalencyDir', 'startUrls', 'fpEnabled', 'notify', 'ecoRam', 'autoWarm', 'allow3pCookies', 'autoPrudence', 'memorySaver', 'autoUpdate', 'morningCheck', 'pubAlert', 'gbKey', 'vintedIcon', 'shieldsOffVinted', 'autoStart', 'nightlyRestart', 'shieldsOffAll', 'nightShein', 'autoRaise', 'dotbRange'];
     for (const k of allowed) if (k in data) store.settings[k] = data[k];
     if ('profilesDir' in data) {
       store.settings.profilesDir = data.profilesDir || DEFAULT_PROFILES_DIR;
@@ -2360,6 +2597,10 @@ app.whenReady().then(() => {
   setInterval(() => dotbWatch().catch(() => {}), 180000);
   setInterval(() => pubWatch().catch(() => {}), 300000);
   setInterval(() => gbPush().catch(() => {}), 300000);
+  setInterval(() => keepDotbFront().catch(() => {}), 300000);
+  setInterval(() => raiseTick().catch(() => {}), 10 * 60e3);
+  setTimeout(() => syncGbExtension().catch(() => {}), 90e3);
+  setInterval(() => syncGbExtension().catch(() => {}), 6 * 3600e3);
   // Nouvelles fenêtres ouvertes dans un profil : on leur remet l'icône Vinted
   setInterval(() => { for (const id of openSet) applyTaskbarIcon(id).catch(() => {}); }, 15000);
   setTimeout(() => gbPush().catch(() => {}), 45000);

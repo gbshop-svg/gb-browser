@@ -938,6 +938,10 @@ function pageSettings() {
             <div class="toggle ${s.autoStart !== false ? 'on' : ''}" data-act="tg-setting" data-k="autoStart"></div></div>
           <div class="setrow"><div class="st"><b>Redémarrage de nuit (4 h)</b><span>Chaque nuit, les profils ouverts sont fermés puis rouverts un par un : la RAM repart à zéro, DotB et ses automatisations sont relancés. Évite les ralentissements après plusieurs jours.</span></div>
             <div class="toggle ${s.nightlyRestart !== false ? 'on' : ''}" data-act="tg-setting" data-k="nightlyRestart"></div></div>
+          <div class="setrow"><div class="st"><b>Mode nuit SHEIN (00h–07h)</b><span>DotB est en pause la nuit : à 00h, GB ferme les comptes Vinted et ouvre le profil « Sourcing SHEIN » (⋯ › Plus d’options) ; l’extension Groupe Barbaray y vérifie les prix (rotation 48 h) et source les manques jusqu’à 05h30. À 07h, les comptes rouvrent un par un avec DotB. Remplace le redémarrage de 4 h.</span></div>
+            <div class="toggle ${s.nightShein !== false ? 'on' : ''}" data-act="tg-setting" data-k="nightShein"></div></div>
+          <div class="setrow"><div class="st"><b>Monter les prix Vinted quand SHEIN augmente</b><span>De 8h à 21h, GB applique les hausses préparées par le site sur les annonces déjà en ligne, dans le bon compte : jamais de baisse, +35 % maximum, 6 par compte et par jour, puis il remet la page DotB au premier plan.</span></div>
+            <div class="toggle ${s.autoRaise !== false ? 'on' : ''}" data-act="tg-setting" data-k="autoRaise"></div></div>
           <div class="setrow"><div class="st"><b>Boucliers Brave coupés partout</b><span>Brave ne bloque plus rien (cookies, pubs, traqueurs) sur aucun site : il se comporte comme un navigateur classique et le warm récolte un maximum de cookies. Attention : les pubs consomment un peu plus de données sur les proxys facturés au Go. Appliqué à la prochaine ouverture du profil.</span></div>
             <div class="toggle ${s.shieldsOffAll !== false ? 'on' : ''}" data-act="tg-setting" data-k="shieldsOffAll"></div></div>
           <div class="setrow"><div class="st"><b>Boucliers Brave coupés sur Vinted</b><span>Sur vinted.fr (et DotB), Brave ne bloque rien et ne brouille pas l’empreinte : le site se comporte comme chez un acheteur normal. Les boucliers restent actifs sur les autres sites. Appliqué à la prochaine ouverture du profil.</span></div>
@@ -975,6 +979,8 @@ function pageSettings() {
           <div class="card-head"><div class="hi" style="color:#f59e0b;background:rgba(245,158,11,.12)">${ic('bolt')}</div>
             <div><h3>DotB</h3><div class="hs">${s.hasDotbToken ? (dotbError() ? esc(dotbError()) : 'Token API enregistré') : 'Token API non configuré'}</div></div>
             <div class="ha"><button class="btn sm" data-go="dotb">Ouvrir la page DotB ›</button></div></div>
+          <div class="setrow"><div class="st"><b>Messages traités par DotB</b><span>Plage choisie pour « Messages aux likes » et « Smart Agent » quand GB démarre les automatisations. Appliqué au prochain démarrage de DotB (⋯ › Démarrer les automatisations DotB pour l’appliquer tout de suite).</span></div>
+            <div class="seg">${[['new', 'Nouveaux'], ['2h', '2 h'], ['24h', '24 h'], ['3d', '3 jours'], ['7d', '7 jours']].map(([k, l]) => `<span class="${(s.dotbRange || '2h') === k ? 'active' : ''}" data-drange="${k}">${l}</span>`).join('')}</div></div>
         </div>
 
         <div class="card">
@@ -1426,6 +1432,10 @@ const ACTIONS = {
       p.prudenceOn ? { label: 'Lever la prudence', icon: 'check', run: () => gb.invoke('health:prudence', [p.id], 0) } : { label: 'Mettre en prudence 48 h', icon: 'alert', run: () => gb.invoke('health:prudence', [p.id], 48) },
       '-',
       { header: 'Automatisation' },
+      { label: `${p.sourcing ? '✓ ' : ''}Profil Sourcing SHEIN (nuit 00h–07h)`, icon: 'flame', run: () => {
+        if (!p.sourcing && !confirm('Faire de ce profil le profil « Sourcing SHEIN » ?\n\nDe 00h à 07h, GB fermera les comptes Vinted et ouvrira ce profil : l’extension Groupe Barbaray y vérifie les prix et source les manques. DotB ne sera jamais lancé dans ce profil.\n\nUtilise un profil SANS compte Vinted, connecté à un compte SHEIN de sourcing.')) return;
+        gb.invoke('profile:update', p.id, { sourcing: !p.sourcing });
+      } },
       { label: `${p.keepAlive ? '✓ ' : ''}Relancer s’il plante`, icon: 'refresh', run: () => gb.invoke('profile:update', p.id, { keepAlive: !p.keepAlive }) },
       { label: `${p.dotbAuto ? '✓ ' : ''}Démarrer DotB à chaque ouverture`, icon: 'bolt', run: () => gb.invoke('profile:update', p.id, { dotbAuto: !p.dotbAuto }) },
       { label: `${p.autoWarm ? '✓ ' : ''}Warm automatique chaque jour`, icon: 'clock', run: () => gb.invoke('profile:update', p.id, { autoWarm: !p.autoWarm }) },
@@ -1690,6 +1700,8 @@ document.addEventListener('click', (e) => {
   if (hf) { S.healthFilter = hf.dataset.hfilter; return render(); }
   const ht = e.target.closest('[data-htab]');
   if (ht) { S.healthTab = ht.dataset.htab; if (S.healthTab === 'tech') loadRam(); return render(); }
+  const dr = e.target.closest('[data-drange]');
+  if (dr) return gb.invoke('settings:save', { dotbRange: dr.dataset.drange });
   const wm = e.target.closest('[data-warm]');
   if (wm) return gb.invoke('settings:save', { warmIntensity: wm.dataset.warm });
   const th = e.target.closest('[data-theme]');
