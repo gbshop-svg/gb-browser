@@ -150,12 +150,35 @@ async function startAutomations(cdp, { keys = ['likes', 'agent', 'orders', 'brid
       return btns.some((t) => /^(d[ée]marrer|start|connecter|activer|lancer)/i.test(t)) ? 'bouton' : 'inconnu';
     })()`);
     if (state === 'actif') { results[card.key] = 'déjà actif'; continue; }
+    // Après le choix « 2 h », le menu déroulant peut encore bloquer les clics quelques instants
+    // (overlay / pointer-events) : on le ferme et on laisse l'animation finir.
+    if (await h.eval(`!!document.querySelector('[role=listbox], [role=menu], [data-radix-popper-content-wrapper]')`)) {
+      await h.key('Escape', 'Escape', 27).catch(() => {});
+    }
+    await h.eval(`document.body.style.pointerEvents === 'none' && (document.body.style.pointerEvents = '')`).catch(() => {});
+    await sleep(1200);
+    const isOn = `(() => { const c = ${find}(); if (!c) return false;
+      if ([...c.querySelectorAll('button')].some((b) => /arr[êe]ter|stop|pause|d[ée]connecter|en cours/i.test(b.innerText))) return true;
+      const sw = c.querySelector('[role=switch], input[type=checkbox]');
+      return !!sw && (sw.matches('input') ? sw.checked : sw.getAttribute('aria-checked') === 'true' || sw.dataset.state === 'checked'); })()`;
+    const target = state === 'switch'
+      ? `() => ${find}().querySelector('[role=switch], input[type=checkbox]')`
+      : `() => [...${find}().querySelectorAll('button')].find((b) => /^(d[ée]marrer|start|connecter|activer|lancer)/i.test(b.innerText.trim()))`;
+    const confirm = () => h.clickEl(`() => [...document.querySelectorAll('[role=dialog] button, [role=alertdialog] button')].find((b) => /^(d[ée]marrer|confirmer|continuer|ok|oui|activer)/i.test(b.innerText.trim()))`).catch(() => {});
     let clicked = false;
-    if (state === 'bouton') clicked = await h.clickEl(`() => [...${find}().querySelectorAll('button')].find((b) => /^(d[ée]marrer|start|connecter|activer|lancer)/i.test(b.innerText.trim()))`);
-    else if (state === 'switch') clicked = await h.clickEl(`() => ${find}().querySelector('[role=switch], input[type=checkbox]')`);
-    await sleep(1500);
-    // Une fenêtre de confirmation peut apparaître
-    await h.clickEl(`() => [...document.querySelectorAll('[role=dialog] button, [role=alertdialog] button')].find((b) => /^(d[ée]marrer|confirmer|continuer|ok|oui|activer)/i.test(b.innerText.trim()))`).catch(() => {});
+    const tries = [
+      () => h.clickEl(target),
+      () => h.eval(`(() => { const el = (${target})(); if (!el) return false; el.focus(); el.click(); return true; })()`),
+      async () => { await h.eval(`(() => { const el = (${target})(); if (el) el.focus(); })()`); await h.key('Enter', 'Enter', 13); return true; },
+    ];
+    for (const t of tries) {
+      if (state !== 'bouton' && state !== 'switch') break;
+      await t().catch(() => false);
+      await sleep(1500);
+      await confirm();
+      if (await waitFor(h, isOn, 4000)) { clicked = true; break; }
+    }
+    if (!clicked && (state === 'bouton' || state === 'switch')) log(`${card.label} : « Démarrer » cliqué mais l'automatisation ne s'est pas lancée`);
     results[card.key] = clicked ? 'démarré' : state;
     await sleep(800);
   }
