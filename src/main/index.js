@@ -573,6 +573,10 @@ async function runDotbAuto(id, { force = false } = {}) {
     if (bad) notify('DotB : démarrage incomplet', `${pcode(p)} ${p.name} — ${txt}`);
     p.dotbStartedAt = new Date().toISOString();
     save();
+    // Retour sur la page bleue DotB (c'est elle qui garde les onglets actifs, sans mise en veille) :
+    // tout de suite, puis encore un peu après (DotB ouvre parfois un onglet Vinted en démarrant ses flux).
+    await bringDotbFront(c).catch(() => {});
+    for (const ms of [20e3, 60e3, 180e3]) setTimeout(() => refrontDotb(id).catch(() => {}), ms);
     return { ok: true, res };
   } catch (e) {
     log(`${pcode(p)} : démarrage DotB impossible — ${e.message}`, 'error');
@@ -842,6 +846,13 @@ async function bringDotbFront(c) {
   await c.send('Target.detachFromTarget', { sessionId }).catch(() => {});
   return true;
 }
+async function refrontDotb(id) {
+  const p = findProfile(id);
+  if (!p || !openSet.has(id) || p.sourcing || noDotbSessions.has(id)) return;
+  if (busy.has(id) && !/^Démarrage DotB/.test(String(busy.get(id)))) return; // warm, prix Vinted… : on ne coupe pas
+  let c;
+  try { c = await CDP.forPort(portOf(p)); await bringDotbFront(c); } finally { if (c) c.close(); }
+}
 async function keepDotbFront() {
   if (nightOn() && inNight()) return;
   for (const id of [...openSet]) {
@@ -859,7 +870,7 @@ async function keepDotbFront() {
       if (hidden) {
         const n = (dotbHidden.get(id) || 0) + 1;
         dotbHidden.set(id, n);
-        if (n >= 2) { // cachée depuis ~10 min : on la remet devant
+        if (n >= 1) { // cachée : on la remet devant (contrôle toutes les 2 min)
           await c.send('Page.bringToFront', {}, sessionId).catch(() => {});
           dotbHidden.delete(id);
           log(`${pcode(p)} : page DotB remise au premier plan`, 'info');
@@ -2602,7 +2613,7 @@ app.whenReady().then(() => {
   setInterval(() => dotbWatch().catch(() => {}), 180000);
   setInterval(() => pubWatch().catch(() => {}), 300000);
   setInterval(() => gbPush().catch(() => {}), 300000);
-  setInterval(() => keepDotbFront().catch(() => {}), 300000);
+  setInterval(() => keepDotbFront().catch(() => {}), 120000);
   setInterval(() => raiseTick().catch(() => {}), 10 * 60e3);
   setTimeout(() => syncGbExtension().catch(() => {}), 90e3);
   setInterval(() => syncGbExtension().catch(() => {}), 6 * 3600e3);
