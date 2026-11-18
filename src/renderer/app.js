@@ -934,6 +934,8 @@ function pageSettings() {
             <div class="toggle ${s.memorySaver !== false ? 'on' : ''}" data-act="tg-setting" data-k="memorySaver"></div></div>
           <div class="setrow"><div class="st"><b>Économie de RAM</b><span>Un processus par site, cache limité, services Google inutiles coupés. Ne touche pas aux onglets Vinted ni à DotB.</span></div>
             <div class="toggle ${s.ecoRam !== false ? 'on' : ''}" data-act="tg-setting" data-k="ecoRam"></div></div>
+          <div class="setrow"><div class="st"><b>Logo Vinted dans la barre des tâches</b><span>Chaque profil a son propre bouton dans la barre des tâches Windows, avec le logo Vinted et son nom (P001 Julia…) au lieu du lion Brave. Prend effet sur les profils ouverts dans les 15 s.</span></div>
+            <div class="toggle ${s.vintedIcon !== false ? 'on' : ''}" data-act="tg-setting" data-k="vintedIcon"></div></div>
           <div class="setrow"><div class="st"><b>Notifications Windows</b><span>Plantage, compte Vinted déconnecté, DotB hors ligne, proxy en panne, nouvelle commande, compte prêt (24 h), chauffe terminée.</span></div>
             <div class="toggle ${s.notify !== false ? 'on' : ''}" data-act="tg-setting" data-k="notify"></div></div>
         </div>

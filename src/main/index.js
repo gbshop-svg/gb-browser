@@ -14,6 +14,7 @@ const warm = require('./warm');
 const FP = require('./fingerprint');
 const { Guardian } = require('./guardian');
 const dotbauto = require('./dotbauto');
+const winicon = require('./winicon');
 
 app.disableHardwareAcceleration();
 
@@ -317,6 +318,15 @@ function prepareSession(p) {
       prefs.profile.block_third_party_cookies = false;
       prefs.profile.default_content_setting_values = { ...(prefs.profile.default_content_setting_values || {}), cookies: 1 };
     }
+    // Boucliers Brave coupés sur Vinted (et DotB) : la page se comporte comme chez un utilisateur normal,
+    // et Brave ne brouille pas l'empreinte que GB applique déjà. Ils restent actifs sur les autres sites (warm).
+    if (store.settings.shieldsOffVinted !== false) {
+      const cs = prefs.profile.content_settings = prefs.profile.content_settings || {};
+      const ex = cs.exceptions = cs.exceptions || {};
+      const sh = ex.braveShields = ex.braveShields || {};
+      const now = String(Date.now() * 1000 + 11644473600000000);
+      for (const host of ['www.vinted.fr', 'vinted.fr', 'dotb.io', 'www.dotb.io']) sh[`*://${host}/*,*`] = { last_modified: now, setting: 2 };
+    }
     // Économiseur de mémoire de Brave : met en veille les onglets inactifs (sauf Vinted et DotB, protégés par l'extension GB)
     const ms = store.settings.memorySaver !== false ? 1 : 0;
     prefs.performance_tuning = {
@@ -424,6 +434,7 @@ async function openProfile(id, { force = false, url = null, headless = false } =
     visible.add(id);
     userClosed.delete(id);
     afterLaunch(id, pages, geo).catch((e) => log(`${pcode(p)} : démarrage — ${e.message}`, 'warn'));
+    [3000, 8000, 20000].forEach((ms) => setTimeout(() => applyTaskbarIcon(id).catch(() => {}), ms));
   }
 
   setTimeout(() => { if (launching.delete(id)) broadcast(); }, 20000);
@@ -443,6 +454,26 @@ const userClosed = new Set();  // fermetures demandées (pas des plantages)
 const crashLog = new Map();    // id -> [horodatages des relances]
 const lastExit = new Map();
 const managedTargets = new Set(); // onglets ouverts par GB : jamais fermés par le nettoyage des pages de bienvenue    // id -> { code, signal } du processus Brave lancé par GB
+
+// ── Icône Vinted dans la barre des tâches (Windows) : un groupe par profil, logo Vinted + nom du profil ──
+let vintedIco = null;
+async function iconFile() {
+  if (vintedIco && fs.existsSync(vintedIco)) return vintedIco;
+  const dest = path.join(app.getPath('userData'), 'icons', 'vinted.ico');
+  vintedIco = await winicon.fetchIcon('https://www.vinted.fr/favicon.ico', dest)
+    || await winicon.fetchIcon('https://www.vinted.fr/apple-touch-icon.png', dest)
+    || (fs.existsSync(assetPath('icon.ico')) ? assetPath('icon.ico') : null);
+  return vintedIco;
+}
+async function applyTaskbarIcon(id) {
+  if (process.platform !== 'win32' || store.settings.vintedIcon === false) return;
+  const p = findProfile(id), r = running.get(id);
+  if (!p || !r || !r.child || !r.child.pid) return;
+  const ico = await iconFile();
+  if (!ico) return;
+  const b = browsers.detect(store.settings.browserPath);
+  winicon.apply(r.child.pid, { ico, appId: `GB.Profil.${p.num}`, name: `${pcode(p)} ${p.name}`, cmd: b && b.path ? `"${b.path}" --user-data-dir="${p.dir}"` : '' });
+}
 
 async function afterLaunch(id, pages, geo) {
   const p = findProfile(id);
@@ -1066,6 +1097,23 @@ async function gbPush(manual = false) {
   return gbLinkState;
 }
 
+// ── Liaison automatique profil ↔ compte DotB : même pseudo Vinted (ou nom du profil = pseudo) ──
+let dotbAccountsCache = [];
+function autoLinkDotb() {
+  const norm = (x) => String(x || '').trim().toLowerCase();
+  let n = 0;
+  for (const a of dotbAccountsCache) {
+    if (!a || !a.login || store.profiles.some((p) => String(p.dotbAccountId) === String(a.id))) continue;
+    const p = store.profiles.find((x) => !x.dotbAccountId && (norm(x.vinted && x.vinted.login) === norm(a.login) || norm(x.name) === norm(a.login)));
+    if (!p) continue;
+    p.dotbAccountId = String(a.id);
+    p.dotbAccountLabel = a.login;
+    n++;
+    log(`${pcode(p)} ${p.name} : relié automatiquement au compte DotB « ${a.login} »`, 'success');
+  }
+  if (n) { save(); broadcast(); }
+}
+
 // ── Surveillance DotB (pont hors ligne, nouvelles commandes) ──
 const bridgeState = new Map();
 let lastOrderCheck = new Date().toISOString();
@@ -1074,6 +1122,8 @@ async function dotbWatch() {
   const acc = await dotbFetch('GET', '/accounts');
   if (!acc.error) {
     const list = (acc.data && (acc.data.data || acc.data)) || [];
+    dotbAccountsCache = Array.isArray(list) ? list : [];
+    autoLinkDotb();
     for (const a of Array.isArray(list) ? list : []) {
       const on = !!(a.bridge && a.bridge.connected);
       const prev = bridgeState.get(a.id);
@@ -1162,6 +1212,7 @@ async function refreshVinted(id) {
     }
     const prev = p.vinted || {};
     p.vinted = { logged: res.logged, login: res.login || (res.logged === null ? prev.login : '') || '', how: res.how, at: new Date().toISOString() };
+    if (p.vinted.login && !p.dotbAccountId) setTimeout(() => autoLinkDotb(), 0);
     if (prev.logged !== p.vinted.logged || prev.login !== p.vinted.login) {
       if (prev.logged === true && p.vinted.logged === false) notify('Compte Vinted déconnecté', `${pcode(p)} ${p.name}${prev.login ? ' (' + prev.login + ')' : ''} n’est plus connecté à Vinted.`);
       save(); broadcast();
@@ -2166,7 +2217,7 @@ function setupIPC() {
 
   // Paramètres
   handle('settings:save', (data = {}) => {
-    const allowed = ['browserPath', 'profilesDir', 'startUrl', 'gbUrl', 'theme', 'dotbToken', 'proxyTimeout', 'warmIntensity', 'closeWelcome', 'scalencyDir', 'startUrls', 'fpEnabled', 'notify', 'ecoRam', 'autoWarm', 'allow3pCookies', 'autoPrudence', 'memorySaver', 'autoUpdate', 'morningCheck', 'pubAlert', 'gbKey'];
+    const allowed = ['browserPath', 'profilesDir', 'startUrl', 'gbUrl', 'theme', 'dotbToken', 'proxyTimeout', 'warmIntensity', 'closeWelcome', 'scalencyDir', 'startUrls', 'fpEnabled', 'notify', 'ecoRam', 'autoWarm', 'allow3pCookies', 'autoPrudence', 'memorySaver', 'autoUpdate', 'morningCheck', 'pubAlert', 'gbKey', 'vintedIcon', 'shieldsOffVinted'];
     for (const k of allowed) if (k in data) store.settings[k] = data[k];
     if ('profilesDir' in data) {
       store.settings.profilesDir = data.profilesDir || DEFAULT_PROFILES_DIR;
@@ -2174,6 +2225,7 @@ function setupIPC() {
     }
     if ('proxyTimeout' in data) store.settings.proxyTimeout = Math.max(2, Math.min(60, Number(data.proxyTimeout) || 8));
     save(); broadcast();
+    if ('dotbToken' in data && data.dotbToken) setTimeout(() => dotbWatch().catch(() => {}), 500);
     return true;
   });
   handle('gb:push', () => gbPush(true));
@@ -2217,6 +2269,8 @@ app.whenReady().then(() => {
   setInterval(() => dotbWatch().catch(() => {}), 180000);
   setInterval(() => pubWatch().catch(() => {}), 300000);
   setInterval(() => gbPush().catch(() => {}), 300000);
+  // Nouvelles fenêtres ouvertes dans un profil : on leur remet l'icône Vinted
+  setInterval(() => { for (const id of openSet) applyTaskbarIcon(id).catch(() => {}); }, 15000);
   setTimeout(() => gbPush().catch(() => {}), 45000);
   setInterval(() => { if (store.settings.ecoRam !== false) purgeAll().catch(() => {}); }, 20 * 60e3);
   setTimeout(() => refreshRealIp().then(checkConflicts).catch(() => {}), 8000);
@@ -2231,6 +2285,7 @@ app.on('second-instance', () => {
 
 app.on('window-all-closed', () => {
   for (const [, r] of running) if (r.relay) r.relay.stop();
+  winicon.stop();
   app.quit();
 });
 
