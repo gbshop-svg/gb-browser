@@ -343,6 +343,58 @@ async function randomSite(h, log, url) {
   }
 }
 
+// ── Vinted : se balader comme une vraie acheteuse (recherche, catalogue, annonces) — aucune action (ni favori, ni message) ──
+const VINTED_Q = ['pull col roulé', 'robe longue', 'cardigan maille', 'jupe plissée', 'manteau laine', 'pull grosse maille', 'robe pull',
+  'blouse dentelle', 'jupe longue', 'veste en jean', 'trench femme', 'pull rayé', 'robe noire', 'chemise à carreaux', 'gilet boutons dorés',
+  'pantalon large', 'jupe satin', 'top dentelle', 'robe vintage', 'pull jacquard', 'doudoune femme', 'bottes cuir', 'sac bandoulière'];
+const VINTED_ITEM = `() => { const l = [...document.querySelectorAll('a[href*="/items/"]')].filter((a) => a.getClientRects().length && !/\/(edit|new)/.test(a.href)); return l[Math.floor(Math.random() * Math.min(l.length, 24))]; }`;
+
+async function vinted(h, log) {
+  log('Vinted : balade sur le site');
+  await h.goto('https://www.vinted.fr/');
+  await h.acceptConsent();
+  if (await h.blocked()) { log('Vinted demande une vérification — étape passée'); return; }
+  await h.scroll(ri(2, 4));
+  await h.wander(ri(1, 3));
+  const searches = ri(1, 2);
+  for (let s = 0; s < searches; s++) {
+    const q = pick(VINTED_Q);
+    log(`Vinted : recherche « ${q} »`);
+    await h.eval('scrollTo({top: 0, behavior: "smooth"})');
+    await sleep(rand(600, 1200));
+    const ok = await h.clickEl(`() => document.querySelector('input#search_text, input[data-testid*="search-text"], input[name="search_text"], input[type="search"]')`);
+    if (ok) {
+      await h.eval(`(() => { const el = document.querySelector('input#search_text, input[data-testid*="search-text"], input[name="search_text"], input[type="search"]'); if (el) el.select && el.select(); })()`);
+      await h.type(q);
+      await sleep(rand(500, 1300));
+      await h.enter();
+      await h.waitLoad();
+    } else {
+      await h.goto('https://www.vinted.fr/catalog?search_text=' + encodeURIComponent(q));
+    }
+    if (await h.blocked()) return;
+    await h.scroll(ri(2, 5));
+    // 2 à 4 annonces regardées par recherche (6 au plus au total)
+    const views = ri(2, 4);
+    for (let v = 0; v < views; v++) {
+      const before = await h.url();
+      if (!(await h.clickEl(VINTED_ITEM))) break;
+      await h.waitLoad();
+      await h.scroll(ri(1, 3));
+      if (Math.random() < 0.6) await h.wander(ri(1, 3));
+      await sleep(rand(3500, 11000)); // temps de lecture de l'annonce
+      await h.send('Page.navigate', { url: before }).catch(() => {});
+      await h.waitLoad();
+      await h.scroll(ri(1, 2));
+    }
+  }
+  // Parfois : un tour par une catégorie du menu
+  if (Math.random() < 0.5 && (await h.clickEl(`() => { const l = [...document.querySelectorAll('a[href*="/catalog/"]')].filter((a) => a.getClientRects().length); return l[Math.floor(Math.random() * Math.min(l.length, 20))]; }`))) {
+    await h.waitLoad();
+    await h.scroll(ri(2, 4));
+  }
+}
+
 async function runWarm(cdp, { log = () => {}, shouldStop, intensity = 'normal' } = {}) {
   const { targetId } = await cdp.send('Target.createTarget', { url: 'about:blank' });
   const { sessionId } = await cdp.send('Target.attachToTarget', { targetId, flatten: true });
@@ -351,13 +403,12 @@ async function runWarm(cdp, { log = () => {}, shouldStop, intensity = 'normal' }
   const h = new Human(cdp, sessionId, shouldStop);
   const others = shuffle(SITES).slice(0, intensity === 'long' ? 12 : intensity === 'court' ? 3 : 7);
   const steps = [
-    () => google(h, log),
     () => leboncoin(h, log),
     () => wikipedia(h, log),
     ...others.map((u) => () => randomSite(h, log, u)),
   ];
-  // Google en premier, le reste mélangé
-  const plan = [steps[0], ...shuffle(steps.slice(1))];
+  // Sites variés mélangés, puis Vinted en dernier (Google retiré : peu utile et souvent bloqué par un captcha).
+  const plan = [...shuffle(steps), () => vinted(h, log)];
   let done = 0;
   for (const step of plan) {
     try { await step(); done++; } catch (e) {

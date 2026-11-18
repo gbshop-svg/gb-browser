@@ -958,7 +958,7 @@ function pageSettings() {
 
         <div class="card">
           <div class="card-head"><div class="hi" style="color:#f97316;background:rgba(249,115,22,.12)">${ic('flame')}</div>
-            <div><h3>Warm</h3><div class="hs">Navigation humaine : Google (recherches tapées au clavier), leboncoin, Wikipédia, sites FR, cookies acceptés.</div></div></div>
+            <div><h3>Warm</h3><div class="hs">Navigation humaine : leboncoin, Wikipédia, sites FR (cookies acceptés), puis une balade sur Vinted (recherches, annonces regardées, sans favori ni message).</div></div></div>
           <div class="setrow" style="border-top:none"><div class="st"><b>Durée</b><span>Court ≈ 2-3 min · Normal ≈ 5-8 min · Long ≈ 10-15 min</span></div>
             <div class="seg">${['court', 'normal', 'long'].map((k) => `<span class="${(s.warmIntensity || 'normal') === k ? 'active' : ''}" data-warm="${k}">${k[0].toUpperCase() + k.slice(1)}</span>`).join('')}</div></div>
           <div class="setrow"><div class="st"><b>Plage horaire des warms automatiques</b><span>Warm quotidien et plan de chauffe 7 jours : à une heure au hasard dans cette plage.</span></div>
