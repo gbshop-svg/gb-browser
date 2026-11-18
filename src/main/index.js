@@ -72,6 +72,8 @@ const DEFAULT_SETTINGS = {
   memorySaver: true,
   autoUpdate: true,
   morningCheck: { enabled: true, hour: 8 },
+  autoStart: true,          // GB Browser se lance avec Windows et rouvre les profils
+  nightlyRestart: true,     // redémarrage des profils ouverts chaque nuit vers 4 h (RAM)
   pubAlert: { normal: 40, fragile: 15 },
   autoPrudence: true,
   autoWarm: { from: 9, to: 21 },
@@ -219,7 +221,11 @@ async function poll() {
     let changed = false;
     await Promise.all(store.profiles.map(async (p) => {
       const alive = await portAlive(portOf(p));
-      if (alive && !openSet.has(p.id)) { openSet.add(p.id); launching.delete(p.id); changed = true; }
+      if (alive && !openSet.has(p.id)) {
+        openSet.add(p.id); launching.delete(p.id); changed = true;
+        // Profil ouvert (même avant cette version) : mémorisé pour être rouvert au démarrage de Windows
+        if (!noDotbSessions.has(p.id) && !headlessIds.has(p.id) && !(store.keepOpen || []).includes(p.id)) { store.keepOpen = [...(store.keepOpen || []), p.id]; save(); }
+      }
       if (!alive && openSet.has(p.id)) {
         openSet.delete(p.id);
         changed = true;
@@ -338,7 +344,9 @@ function prepareSession(p) {
   } catch (e) { log(`${pcode(p)} : préparation de session — ${e.message}`, 'warn'); }
 }
 
-async function openProfile(id, { force = false, url = null, headless = false } = {}) {
+const headlessIds = new Set(); // lancements invisibles (import, vérification) : jamais rouverts au démarrage
+const noDotbSessions = new Set(); // profils ouverts par le warm : sans DotB (sinon DotB et le warm se gênent)
+async function openProfile(id, { force = false, url = null, headless = false, noDotb = false } = {}) {
   const p = findProfile(id);
   if (!p) return { ok: false, error: 'Profil introuvable' };
   if (!force && (openSet.has(id) || launching.has(id))) return { ok: true };
@@ -377,7 +385,9 @@ async function openProfile(id, { force = false, url = null, headless = false } =
 
   // Extensions
   const disableFeatures = [];
-  const extPaths = store.extensions.filter((e) => e.enabled && fs.existsSync(e.path)).map((e) => e.path);
+  if (noDotb) noDotbSessions.add(id); else noDotbSessions.delete(id);
+  if (headless) headlessIds.add(id); else headlessIds.delete(id);
+  const extPaths = store.extensions.filter((e) => e.enabled && fs.existsSync(e.path) && !(noDotb && e.webstoreId === DOTB_EXT_ID)).map((e) => e.path);
   if (store.settings.memorySaver !== false && !headless) extPaths.push(assetPath('gb-helper'));
   if (extPaths.length) {
     extra.push(`--load-extension=${extPaths.join(',')}`);
@@ -427,6 +437,7 @@ async function openProfile(id, { force = false, url = null, headless = false } =
     broadcast();
   });
   running.set(id, { child, relay });
+  if (!headless && !noDotb && !(store.keepOpen || []).includes(id)) { store.keepOpen = [...(store.keepOpen || []), id]; save(); }
   if (!headless) {
     child.on('exit', (code, signal) => { lastExit.set(id, { code, signal, at: Date.now() }); });
     p.lastOpened = new Date().toISOString();
@@ -514,7 +525,7 @@ async function afterLaunch(id, pages, geo) {
     await sleep(6000); await cleanup();
   } finally { c.close(); }
   // 3) Automatisations DotB
-  if (p.dotbAuto) setTimeout(() => runDotbAuto(id).catch(() => {}), 15000);
+  if (p.dotbAuto && !noDotbSessions.has(id)) setTimeout(() => runDotbAuto(id).catch(() => {}), 15000);
 }
 
 async function runDotbAuto(id, { force = false } = {}) {
@@ -525,6 +536,13 @@ async function runDotbAuto(id, { force = false } = {}) {
     return { ok: false, error: 'Compte en prudence : automatisations DotB en pause' };
   }
   if (!store.extensions.find((e) => e.webstoreId === DOTB_EXT_ID && e.enabled)) return { ok: false, error: 'Extension DotB non installée ou désactivée' };
+  if (noDotbSessions.has(id)) return { ok: false, error: 'Profil ouvert pour le warm (sans DotB) : rouvre-le pour lancer DotB' };
+  if (String(busy.get(id) || '').startsWith('Warm')) {
+    // Un warm tourne dans ce profil : DotB démarre juste après (sinon les deux se battent pour l'onglet actif).
+    log(`${pcode(p)} : DotB démarrera à la fin du warm`, 'info');
+    const t = setInterval(() => { if (!String(busy.get(id) || '').startsWith('Warm')) { clearInterval(t); runDotbAuto(id, { force }).catch(() => {}); } }, 30000);
+    return { ok: true, deferred: true };
+  }
   busy.set(id, 'Démarrage DotB…');
   broadcast();
   const c = await CDP.forPort(portOf(p));
@@ -586,10 +604,11 @@ async function onProfileGone(id) {
 }
 
 // Fermeture propre via DevTools (les cookies sont bien enregistrés), sinon fermeture forcée
-async function closeProfile(id, { quiet = false } = {}) {
+async function closeProfile(id, { quiet = false, keepInList = false } = {}) {
   const p = findProfile(id);
   if (!p) return;
   userClosed.add(id);
+  if (!keepInList && (store.keepOpen || []).includes(id)) { store.keepOpen = store.keepOpen.filter((x) => x !== id); save(); }
   let closed = false;
   if (await portAlive(portOf(p))) {
     try {
@@ -627,7 +646,7 @@ async function warmProfile(id, { intensity: forced, closeAfter = false } = {}) {
   let c;
   try {
     if (!(await portAlive(portOf(p)))) {
-      const r = await openProfile(id);
+      const r = await openProfile(id, { noDotb: true });
       if (!r.ok) throw new Error(r.error);
       if (!(await waitAlive(portOf(p)))) throw new Error('le profil ne répond pas');
       await sleep(4000);
@@ -660,7 +679,13 @@ async function warmProfile(id, { intensity: forced, closeAfter = false } = {}) {
     busy.delete(id);
     warmStops.delete(id);
     broadcast();
-    if (closeAfter && !wasOpen && !p.keepAlive) await closeProfile(id, { quiet: true });
+    // Profil ouvert par le warm (donc sans DotB) : on le ferme. S'il doit rester ouvert (« relancer s'il plante »
+    // ou DotB automatique), on le rouvre normalement, avec DotB et ses automatisations.
+    if (!wasOpen && (closeAfter || p.keepAlive || p.dotbAuto)) {
+      await closeProfile(id, { quiet: true });
+      noDotbSessions.delete(id);
+      if (p.keepAlive || p.dotbAuto) { await sleep(3000); openProfile(id).catch(() => {}); }
+    }
   }
 }
 
@@ -680,12 +705,53 @@ function pickWarmTime(dayStr) {
   return new Date(start.getTime() + min * 60e3).toISOString();
 }
 let schedulerBusy = false;
+// ── Redémarrage de nuit : chaque profil ouvert est fermé puis rouvert (RAM remise à zéro, DotB relancé) ──
+let nightlyRunning = false;
+async function nightlyRestart() {
+  if (nightlyRunning) return;
+  nightlyRunning = true;
+  try {
+    const ids = [...openSet].filter((id) => visible.has(id) && !busy.has(id) && !noDotbSessions.has(id));
+    if (!ids.length) return;
+    log(`Redémarrage de nuit de ${ids.length} profil(s), un par un`, 'info');
+    for (const id of ids) {
+      const p = findProfile(id);
+      if (!p || busy.has(id)) continue;
+      await closeProfile(id, { quiet: true, keepInList: true });
+      await sleep(5000);
+      await openProfile(id).catch(() => {});
+      await sleep(45000);
+    }
+    log('Redémarrage de nuit terminé', 'success');
+  } finally { nightlyRunning = false; }
+}
+
+// ── Démarrage avec Windows : GB Browser se lance seul et rouvre les profils qui étaient ouverts ──
+function applyAutoStart() {
+  if (process.platform !== 'win32' || !app.isPackaged) return;
+  try { app.setLoginItemSettings({ openAtLogin: store.settings.autoStart !== false, args: ['--autostart'] }); } catch {}
+}
+async function reopenAfterBoot() {
+  const ids = (store.keepOpen || []).filter((id) => findProfile(id));
+  if (!ids.length) return;
+  log(`Démarrage avec Windows : réouverture de ${ids.length} profil(s)`, 'info');
+  for (const id of ids) {
+    if (openSet.has(id) || launching.has(id)) continue;
+    await openProfile(id).catch(() => {});
+    await sleep(25000); // un par un : la machine vient de démarrer
+  }
+}
+
 async function scheduler() {
   if (schedulerBusy) return;
   schedulerBusy = true;
   try {
     const now = Date.now();
     const d = today();
+    if (store.settings.nightlyRestart !== false && store.lastNightly !== d && new Date().getHours() === 4) {
+      store.lastNightly = d; save();
+      nightlyRestart().catch(() => {});
+    }
     const mc = store.settings.morningCheck || {};
     if (mc.enabled !== false && store.lastMorning !== d && new Date().getHours() >= (mc.hour ?? 8)) {
       store.lastMorning = d; save();
@@ -2217,7 +2283,7 @@ function setupIPC() {
 
   // Paramètres
   handle('settings:save', (data = {}) => {
-    const allowed = ['browserPath', 'profilesDir', 'startUrl', 'gbUrl', 'theme', 'dotbToken', 'proxyTimeout', 'warmIntensity', 'closeWelcome', 'scalencyDir', 'startUrls', 'fpEnabled', 'notify', 'ecoRam', 'autoWarm', 'allow3pCookies', 'autoPrudence', 'memorySaver', 'autoUpdate', 'morningCheck', 'pubAlert', 'gbKey', 'vintedIcon', 'shieldsOffVinted'];
+    const allowed = ['browserPath', 'profilesDir', 'startUrl', 'gbUrl', 'theme', 'dotbToken', 'proxyTimeout', 'warmIntensity', 'closeWelcome', 'scalencyDir', 'startUrls', 'fpEnabled', 'notify', 'ecoRam', 'autoWarm', 'allow3pCookies', 'autoPrudence', 'memorySaver', 'autoUpdate', 'morningCheck', 'pubAlert', 'gbKey', 'vintedIcon', 'shieldsOffVinted', 'autoStart', 'nightlyRestart'];
     for (const k of allowed) if (k in data) store.settings[k] = data[k];
     if ('profilesDir' in data) {
       store.settings.profilesDir = data.profilesDir || DEFAULT_PROFILES_DIR;
@@ -2226,6 +2292,7 @@ function setupIPC() {
     if ('proxyTimeout' in data) store.settings.proxyTimeout = Math.max(2, Math.min(60, Number(data.proxyTimeout) || 8));
     save(); broadcast();
     if ('dotbToken' in data && data.dotbToken) setTimeout(() => dotbWatch().catch(() => {}), 500);
+    if ('autoStart' in data) applyAutoStart();
     return true;
   });
   handle('gb:push', () => gbPush(true));
@@ -2275,6 +2342,8 @@ app.whenReady().then(() => {
   setInterval(() => { if (store.settings.ecoRam !== false) purgeAll().catch(() => {}); }, 20 * 60e3);
   setTimeout(() => refreshRealIp().then(checkConflicts).catch(() => {}), 8000);
   setupUpdater();
+  applyAutoStart();
+  if (process.argv.includes('--autostart')) setTimeout(() => reopenAfterBoot().catch(() => {}), 20000);
   setTimeout(() => dotbWatch().catch(() => {}), 30000);
   setTimeout(() => updateWebstoreExtensions(false), 15000);
 });

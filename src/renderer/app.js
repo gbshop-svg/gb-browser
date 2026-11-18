@@ -934,6 +934,12 @@ function pageSettings() {
             <div class="toggle ${s.memorySaver !== false ? 'on' : ''}" data-act="tg-setting" data-k="memorySaver"></div></div>
           <div class="setrow"><div class="st"><b>Économie de RAM</b><span>Un processus par site, cache limité, services Google inutiles coupés. Ne touche pas aux onglets Vinted ni à DotB.</span></div>
             <div class="toggle ${s.ecoRam !== false ? 'on' : ''}" data-act="tg-setting" data-k="ecoRam"></div></div>
+          <div class="setrow"><div class="st"><b>Démarrer avec Windows</b><span>Au démarrage du PC ou du VPS, GB Browser se lance tout seul et rouvre un par un les profils qui étaient ouverts (DotB relancé). Sur un VPS, la session Windows doit s’ouvrir automatiquement.</span></div>
+            <div class="toggle ${s.autoStart !== false ? 'on' : ''}" data-act="tg-setting" data-k="autoStart"></div></div>
+          <div class="setrow"><div class="st"><b>Redémarrage de nuit (4 h)</b><span>Chaque nuit, les profils ouverts sont fermés puis rouverts un par un : la RAM repart à zéro, DotB et ses automatisations sont relancés. Évite les ralentissements après plusieurs jours.</span></div>
+            <div class="toggle ${s.nightlyRestart !== false ? 'on' : ''}" data-act="tg-setting" data-k="nightlyRestart"></div></div>
+          <div class="setrow"><div class="st"><b>Boucliers Brave coupés sur Vinted</b><span>Sur vinted.fr (et DotB), Brave ne bloque rien et ne brouille pas l’empreinte : le site se comporte comme chez un acheteur normal. Les boucliers restent actifs sur les autres sites. Appliqué à la prochaine ouverture du profil.</span></div>
+            <div class="toggle ${s.shieldsOffVinted !== false ? 'on' : ''}" data-act="tg-setting" data-k="shieldsOffVinted"></div></div>
           <div class="setrow"><div class="st"><b>Logo Vinted dans la barre des tâches</b><span>Chaque profil a son propre bouton dans la barre des tâches Windows, avec le logo Vinted et son nom (P001 Julia…) au lieu du lion Brave. Prend effet sur les profils ouverts dans les 15 s.</span></div>
             <div class="toggle ${s.vintedIcon !== false ? 'on' : ''}" data-act="tg-setting" data-k="vintedIcon"></div></div>
           <div class="setrow"><div class="st"><b>Notifications Windows</b><span>Plantage, compte Vinted déconnecté, DotB hors ligne, proxy en panne, nouvelle commande, compte prêt (24 h), chauffe terminée.</span></div>
