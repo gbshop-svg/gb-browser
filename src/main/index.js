@@ -643,13 +643,20 @@ async function warmProfile(id, { intensity: forced, closeAfter = false } = {}) {
   const intensity = forced || store.settings.warmIntensity || 'normal';
   const wasOpen = await portAlive(portOf(p));
   log(`${pcode(p)} : warm lancé (${intensity})`);
-  let c;
+  let c, pausedDotb = false;
   try {
     if (!(await portAlive(portOf(p)))) {
       const r = await openProfile(id, { noDotb: true });
       if (!r.ok) throw new Error(r.error);
       if (!(await waitAlive(portOf(p)))) throw new Error('le profil ne répond pas');
       await sleep(4000);
+    }
+    // Profil déjà ouvert avec DotB : on coupe ses automatisations (likes, Smart Agent, commandes, Bridge)
+    // pendant le warm, pour qu'aucune demande DotB ne passe ; elles sont relancées à la fin.
+    if (wasOpen && !noDotbSessions.has(id) && store.extensions.find((e) => e.webstoreId === DOTB_EXT_ID && e.enabled)) {
+      busy.set(id, 'Warm · pause DotB'); broadcast();
+      await stopDotbAuto(id).catch(() => {});
+      pausedDotb = true;
     }
     c = await CDP.forPort(portOf(p));
     const res = await warm.runWarm(c, {
@@ -681,6 +688,10 @@ async function warmProfile(id, { intensity: forced, closeAfter = false } = {}) {
     broadcast();
     // Profil ouvert par le warm (donc sans DotB) : on le ferme. S'il doit rester ouvert (« relancer s'il plante »
     // ou DotB automatique), on le rouvre normalement, avec DotB et ses automatisations.
+    if (pausedDotb) {
+      if (p.dotbAuto) { log(`${pcode(p)} : warm fini, relance de DotB`); setTimeout(() => runDotbAuto(id).catch(() => {}), 3000); }
+      else log(`${pcode(p)} : warm fini — DotB a été mis en pause pendant le warm, relance-le si besoin`, 'warn');
+    }
     if (!wasOpen && (closeAfter || p.keepAlive || p.dotbAuto)) {
       await closeProfile(id, { quiet: true });
       noDotbSessions.delete(id);

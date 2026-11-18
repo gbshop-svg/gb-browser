@@ -54,10 +54,29 @@ async function startAutomations(cdp, { keys = ['likes', 'agent', 'orders', 'brid
   const h = new Human(cdp, sessionId);
   const ready = await waitFor(h, `!!document.body && /automatisations/i.test(document.body.innerText) && document.querySelectorAll('button').length > 3`, 25000);
   if (!ready) throw new Error('la page DotB ne s’affiche pas (es-tu connecté à DotB dans ce profil ?)');
-  // Si on n'est pas sur l'onglet Automatisations, on clique dessus dans le menu
-  if (!(await h.eval(`[...document.querySelectorAll('button')].some((b) => /^d[ée]marrer$/i.test(b.innerText.trim()))`))) {
-    await h.clickEl(`() => [...document.querySelectorAll('a,button,div,span')].find((el) => el.children.length <= 2 && /^automatisations$/i.test((el.innerText || '').trim()))`);
-    await sleep(2500);
+  // DotB peut s'ouvrir sur une autre section (Dressing…) : on va sur « Automatisations » et on vérifie
+  // que les cartes (Smart Agent v2, Bridge…) sont bien affichées avant de continuer.
+  const onAuto = `(${cardJs(/smart agent v2/i)})() || (${cardJs(/^bridge$/i)})()`;
+  for (let attempt = 0; attempt < 4 && !(await h.eval(`!!(${onAuto})`)); attempt++) {
+    if (attempt < 2) {
+      // Lien du menu : le plus petit élément dont le texte est exactement « Automatisations », puis son ancêtre cliquable
+      await h.clickEl(`() => {
+        const els = [...document.querySelectorAll('a,button,[role=tab],[role=menuitem],[role=link],li,div,span,p')]
+          .filter((el) => /^automatisations?$/i.test((el.innerText || '').trim()))
+          .sort((a, b) => a.innerText.length - b.innerText.length || a.querySelectorAll('*').length - b.querySelectorAll('*').length);
+        const el = els[0];
+        return el ? (el.closest('a,button,[role=tab],[role=menuitem],[role=link],li') || el) : null;
+      }`);
+    } else {
+      // Dernier recours : adresse directe de la section
+      const base = (pageUrl || DOTB_PAGE);
+      await cdp.send('Page.navigate', { url: base + (attempt === 2 ? '#/automations' : '#/automatisations') }, sessionId).catch(() => {});
+    }
+    await waitFor(h, `!!(${onAuto})`, 8000);
+  }
+  if (!(await h.eval(`!!(${onAuto})`))) {
+    const menu = await h.eval(`[...document.querySelectorAll('a,button,[role=tab],[role=menuitem],nav li')].map((e) => (e.innerText || '').trim()).filter((t) => t && t.length < 30).slice(0, 25).join(' | ')`).catch(() => '');
+    log(`section Automatisations introuvable (menu vu : ${menu || 'rien'})`);
   }
   const results = {};
   for (const card of CARDS.filter((c) => keys.includes(c.key))) {
