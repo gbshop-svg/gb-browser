@@ -1033,13 +1033,25 @@ async function syncGbExtension() {
   const v = await fetch(`${base}/api/gb/extension?v=1`, auth).then((x) => (x.ok ? x.json() : null)).catch(() => null);
   if (!v || !v.version) return;
   let rec = store.extensions.find((e) => e.gbSourcing);
-  if (rec && rec.version === v.version && fs.existsSync(rec.path)) return;
+  // Liaison automatique : un jeton d'extension demandé au site avec la clé GB (plus de code à taper sur le VPS)
+  const ensureToken = async () => {
+    if (rec.gbToken) return;
+    const t = await fetch(`${base}/api/gb/ext-token`, { method: 'POST', headers: { ...auth.headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ label: 'P' + String((sourcingProfile() || {}).num || 0).padStart(3, '0') + ' Sourcing' }) })
+      .then((x) => (x.ok ? x.json() : null)).catch(() => null);
+    if (t && t.token) { rec.gbToken = t.token; save(); log('Extension Groupe Barbaray reliée automatiquement au site', 'success'); }
+  };
+  // « Mode nuit » coché d'office + jeton de liaison (l'extension lit ce fichier à son démarrage)
+  const writeFlag = () => { try { fs.writeFileSync(path.join(rec.path, 'gb-night.json'), JSON.stringify({ nightMode: true, token: rec.gbToken || null, base })); } catch {} };
+  if (rec && rec.version === v.version && fs.existsSync(rec.path)) {
+    if (!rec.gbToken) { await ensureToken(); writeFlag(); }
+    return;
+  }
   const res = await fetch(`${base}/api/gb/extension`, auth);
   if (!res.ok) return;
   rec = await installExtension(Buffer.from(await res.arrayBuffer()), { source: 'groupe-barbaray', existing: rec });
   rec.gbSourcing = true;
-  // « Mode nuit » coché d'office dans ce profil (l'extension lit ce fichier)
-  try { fs.writeFileSync(path.join(rec.path, 'gb-night.json'), JSON.stringify({ nightMode: true })); } catch {}
+  await ensureToken();
+  writeFlag();
   save(); broadcast();
   log(`Extension Groupe Barbaray ${rec.version} prête pour le profil Sourcing`, 'success');
   // Profil Sourcing ouvert : on le relance pour charger la nouvelle version — jamais la nuit (il travaille),
@@ -1051,6 +1063,58 @@ async function syncGbExtension() {
     await sleep(4000);
     await openProfile(sp.id).catch(() => {});
   }
+}
+
+// ── Ordres du site (connecteur Claude) : ouvrir / fermer / relancer des profils ──
+let gbCmdBusy = false;
+function resolveProfiles(list) {
+  const out = new Set();
+  for (const raw of list || []) {
+    const t = String(raw).trim().toLowerCase();
+    if (t === 'tous' || t === 'vinted' || t === 'all') store.profiles.filter((p) => !p.sourcing && !p.closedByVinted).forEach((p) => out.add(p));
+    else if (t === 'sourcing') { const sp = sourcingProfile(); if (sp) out.add(sp); }
+    else {
+      const m = /^p?0*(\d{1,3})$/.exec(t);
+      const p = m ? store.profiles.find((x) => x.num === Number(m[1])) : store.profiles.find((x) => (x.name || '').toLowerCase() === t || pcode(x).toLowerCase() === t);
+      if (p) out.add(p);
+    }
+  }
+  return [...out];
+}
+async function gbCommandsTick() {
+  const key = store.settings.gbKey, base = (store.settings.gbUrl || '').replace(/\/+$/, '');
+  if (!key || !base || gbCmdBusy) return;
+  const headers = { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' };
+  const r = await fetch(`${base}/api/gb/commands`, { headers }).then((x) => (x.ok ? x.json() : null)).catch(() => null);
+  if (!r || !Array.isArray(r.commands) || !r.commands.length) return;
+  gbCmdBusy = true;
+  try {
+    for (const c of r.commands) {
+      const ps = resolveProfiles(c.profils);
+      const done = [];
+      log(`Ordre du site : ${c.action} ${ps.map(pcode).join(', ') || '(aucun profil reconnu)'}`, 'info');
+      for (const p of ps) {
+        try {
+          const open = openSet.has(p.id) || launching.has(p.id);
+          if (c.action === 'fermer') {
+            if (open) { await closeProfile(p.id, { quiet: true }); done.push(`${pcode(p)} fermé`); } else done.push(`${pcode(p)} déjà fermé`);
+          } else if (c.action === 'ouvrir') {
+            if (open) { done.push(`${pcode(p)} déjà ouvert`); continue; }
+            const res = await openProfile(p.id, p.sourcing ? { url: 'https://fr.shein.com/' } : {});
+            done.push(res && res.ok === false ? `${pcode(p)} : ${res.error}` : `${pcode(p)} ouvert`);
+            await sleep(25000);
+          } else if (c.action === 'relancer') {
+            if (open) { await closeProfile(p.id, { quiet: true, keepInList: true }); await sleep(5000); }
+            const res = await openProfile(p.id, p.sourcing ? { url: 'https://fr.shein.com/' } : {});
+            done.push(res && res.ok === false ? `${pcode(p)} : ${res.error}` : `${pcode(p)} relancé`);
+            await sleep(25000);
+          }
+        } catch (e) { done.push(`${pcode(p)} : ${e.message}`); }
+      }
+      await fetch(`${base}/api/gb/commands`, { method: 'POST', headers, body: JSON.stringify({ id: c.id, ok: ps.length > 0, result: done.join(' · ') || 'aucun profil reconnu' }) }).catch(() => {});
+      broadcast();
+    }
+  } finally { gbCmdBusy = false; }
 }
 
 async function scheduler() {
@@ -2665,6 +2729,7 @@ app.whenReady().then(() => {
   setInterval(() => raiseTick().catch(() => {}), 10 * 60e3);
   setTimeout(() => syncGbExtension().catch(() => {}), 90e3);
   setInterval(() => syncGbExtension().catch(() => {}), 30 * 60e3); // nouvelle version sur le site → installée en 30 min max
+  setInterval(() => gbCommandsTick().catch(() => {}), 60e3); // ordres du connecteur Claude
   // Nouvelles fenêtres ouvertes dans un profil : on leur remet l'icône Vinted
   setInterval(() => { for (const id of openSet) applyTaskbarIcon(id).catch(() => {}); }, 15000);
   setTimeout(() => gbPush().catch(() => {}), 45000);
