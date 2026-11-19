@@ -656,7 +656,7 @@ async function closeProfile(id, { quiet = false, keepInList = false } = {}) {
 // ── Warm : navigation humaine (Google, leboncoin, Wikipédia, sites FR) ──
 const warmStops = new Set();
 
-async function warmProfile(id, { intensity: forced, closeAfter = false } = {}) {
+async function warmProfile(id, { intensity: forced, closeAfter = false, focus = '' } = {}) {
   const p = findProfile(id);
   if (!p) return { ok: false, error: 'Profil introuvable' };
   // DotB en train de démarrer dans ce profil : on attend qu'il ait fini (1 min 30 max) au lieu de refuser le warm.
@@ -686,6 +686,7 @@ async function warmProfile(id, { intensity: forced, closeAfter = false } = {}) {
     c = await CDP.forPort(portOf(p));
     const res = await warm.runWarm(c, {
       intensity,
+      focus,
       shouldStop: () => warmStops.has(id),
       log: (m) => { busy.set(id, `Warm · ${m.length > 42 ? m.slice(0, 40) + '…' : m}`); broadcast(); log(`${pcode(p)} warm · ${m}`); },
     });
@@ -713,14 +714,15 @@ async function warmProfile(id, { intensity: forced, closeAfter = false } = {}) {
     broadcast();
     // Profil ouvert par le warm (donc sans DotB) : on le ferme. S'il doit rester ouvert (« relancer s'il plante »
     // ou DotB automatique), on le rouvre normalement, avec DotB et ses automatisations.
-    if (pausedDotb) {
+    const nightNow = nightOn() && inNight(); // la nuit : le compte reste fermé jusqu'à 07h
+    if (pausedDotb && !nightNow) {
       if (p.dotbAuto) { log(`${pcode(p)} : warm fini, relance de DotB`); setTimeout(() => runDotbAuto(id).catch(() => {}), 3000); }
       else log(`${pcode(p)} : warm fini — DotB a été mis en pause pendant le warm, relance-le si besoin`, 'warn');
     }
     if (!wasOpen && (closeAfter || p.keepAlive || p.dotbAuto)) {
-      await closeProfile(id, { quiet: true });
+      await closeProfile(id, { quiet: true, keepInList: nightNow }); // la nuit : il doit rouvrir à 07h
       noDotbSessions.delete(id);
-      if (p.keepAlive || p.dotbAuto) { await sleep(3000); openProfile(id).catch(() => {}); }
+      if ((p.keepAlive || p.dotbAuto) && !nightNow) { await sleep(3000); openProfile(id).catch(() => {}); }
     }
   }
 }
@@ -833,6 +835,32 @@ async function nightEnd() {
     store.nightClosed = [];
     save();
   } finally { nightRunning = false; }
+}
+
+// ── Warm de nuit (00h05 → ~02h) : DotB est en pause nocturne, les comptes Vinted sont fermés.
+// Chaque compte est rouvert seul (sans DotB), fait une vraie session Vinted, puis se referme.
+// Pas plus tard que 02h : une session à 4h du matin ne ressemble à personne.
+const nightWarmOn = () => nightOn() && store.settings.nightWarm !== false;
+const localDay = () => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`; };
+let nightWarmBusy = false;
+async function nightWarmTick() {
+  if (nightWarmBusy || nightRunning) return;
+  const n = new Date(), h = n.getHours(), m = n.getMinutes();
+  if (!((h === 0 && m >= 5) || (h === 1 && m < 50))) return;
+  const key = localDay();
+  const ids = [...new Set([...(store.nightClosed || []), ...store.profiles.filter((p) => p.autoWarm || (planDay(p) && planDay(p) <= PLAN_DAYS)).map((p) => p.id)])];
+  const todo = ids.map(findProfile).filter((p) => p && !p.sourcing && !p.closedByVinted && !prudenceActive(p) && p.lastNightWarm !== key && !openSet.has(p.id) && !busy.has(p.id));
+  if (!todo.length) return;
+  const p = todo[0];
+  nightWarmBusy = true;
+  try {
+    p.lastNightWarm = key; save();
+    const day = planDay(p);
+    const intensity = day && day <= PLAN_DAYS ? PLAN_INTENSITY[day - 1] : (store.settings.warmIntensity || 'court');
+    log(`🌙 ${pcode(p)} : warm Vinted de nuit (${intensity}) — ${todo.length - 1} autre(s) après`, 'info');
+    await sleep((20 + Math.random() * 70) * 1000); // départs irréguliers
+    await warmProfile(p.id, { intensity, closeAfter: true, focus: 'vinted' });
+  } finally { nightWarmBusy = false; }
 }
 
 // ── Page DotB au premier plan : c'est elle qui empêche Brave de mettre les onglets en veille ──
@@ -1035,6 +1063,7 @@ async function scheduler() {
       if (inNight() && store.nightStartedDay !== d) { store.nightStartedDay = d; save(); nightStart().catch((e) => log(`Mode nuit : ${e.message}`, 'error')); }
       else if (new Date().getHours() >= NIGHT_TO && store.nightStartedDay === d && store.nightEndedDay !== d) { store.nightEndedDay = d; save(); nightEnd().catch((e) => log(`Fin de nuit : ${e.message}`, 'error')); }
     }
+    if (nightWarmOn() && inNight() && !nightRunning) nightWarmTick().catch((e) => log(`Warm de nuit : ${e.message}`, 'error'));
     if (store.settings.nightlyRestart !== false && store.lastNightly !== d && new Date().getHours() === 4) {
       store.lastNightly = d; save();
       nightlyRestart().catch(() => {});
@@ -1067,6 +1096,7 @@ async function scheduler() {
       }
       const inPlan = day && day <= PLAN_DAYS;
       if (p.sourcing || (!p.autoWarm && !inPlan)) continue;
+      if (nightWarmOn()) continue; // mode nuit : le warm se fait la nuit (nightWarmTick), pas en journée
       if (p.lastWarm && p.lastWarm.slice(0, 10) === d) continue;
       if (!p.nextWarmAt || p.nextWarmAt.slice(0, 10) !== d) { p.nextWarmAt = pickWarmTime(d); save(); }
       if (now < Date.parse(p.nextWarmAt) || busy.has(p.id)) continue;
@@ -2578,7 +2608,7 @@ function setupIPC() {
 
   // Paramètres
   handle('settings:save', (data = {}) => {
-    const allowed = ['browserPath', 'profilesDir', 'startUrl', 'gbUrl', 'theme', 'dotbToken', 'proxyTimeout', 'warmIntensity', 'closeWelcome', 'scalencyDir', 'startUrls', 'fpEnabled', 'notify', 'ecoRam', 'autoWarm', 'allow3pCookies', 'autoPrudence', 'memorySaver', 'autoUpdate', 'morningCheck', 'pubAlert', 'gbKey', 'vintedIcon', 'shieldsOffVinted', 'autoStart', 'nightlyRestart', 'shieldsOffAll', 'nightShein', 'autoRaise', 'dotbRange'];
+    const allowed = ['browserPath', 'profilesDir', 'startUrl', 'gbUrl', 'theme', 'dotbToken', 'proxyTimeout', 'warmIntensity', 'closeWelcome', 'scalencyDir', 'startUrls', 'fpEnabled', 'notify', 'ecoRam', 'autoWarm', 'allow3pCookies', 'autoPrudence', 'memorySaver', 'autoUpdate', 'morningCheck', 'pubAlert', 'gbKey', 'vintedIcon', 'shieldsOffVinted', 'autoStart', 'nightlyRestart', 'shieldsOffAll', 'nightShein', 'autoRaise', 'dotbRange', 'nightWarm'];
     for (const k of allowed) if (k in data) store.settings[k] = data[k];
     if ('profilesDir' in data) {
       store.settings.profilesDir = data.profilesDir || DEFAULT_PROFILES_DIR;

@@ -395,12 +395,126 @@ async function vinted(h, log) {
   }
 }
 
-async function runWarm(cdp, { log = () => {}, shouldStop, intensity = 'normal' } = {}) {
+// ── Warm « Vinted » (la nuit, DotB en pause) : une vraie session d'acheteuse sur Vinted ──
+// Fil d'accueil, recherches tapées au clavier avec filtres, annonces regardées (photos feuilletées),
+// boutiques de vendeuses visitées, catégories, et parfois 1 favori. Jamais de message, d'offre ni d'achat.
+const VINTED_ITEM_PAGE = /\/items\/\d+/;
+const PRICE_TO = ['15', '20', '25', '30', '40'];
+const ORDERS = ['newest_first', 'relevance', 'price_low_to_high'];
+
+async function vintedLookItem(h, log, { canFav }) {
+  await h.waitLoad();
+  await sleep(rand(1200, 2500));
+  // Feuilleter les photos : clic sur la photo principale, flèche droite, Échap
+  if (Math.random() < 0.65 && (await h.clickEl(`() => [...document.querySelectorAll('[data-testid*="item-photo"] img, .item-photos img, figure img')].find((i) => i.getClientRects().length && i.naturalWidth > 150)`))) {
+    await sleep(rand(900, 1800));
+    for (let i = 0, n = ri(1, 4); i < n; i++) { await h.key('ArrowRight', 'ArrowRight', 39); await sleep(rand(900, 2600)); }
+    await h.key('Escape', 'Escape', 27);
+    await sleep(rand(600, 1200));
+  }
+  await h.scroll(ri(1, 3));
+  if (Math.random() < 0.6) await h.wander(ri(1, 2));
+  await sleep(rand(4000, 12000)); // lecture de la description
+  let faved = false;
+  if (canFav && Math.random() < 0.35) {
+    faved = await h.clickEl(`() => [...document.querySelectorAll('button[data-testid*="favourite"], button[aria-label*="avori"], [data-testid*="favourite-button"] button')].find((b) => b.getClientRects().length && b.getAttribute('aria-pressed') !== 'true')`);
+    if (faved) { log('Vinted : 1 annonce mise en favori'); await sleep(rand(800, 1800)); }
+  }
+  // Parfois : la boutique de la vendeuse
+  if (Math.random() < 0.3) {
+    const before = await h.url();
+    if (await h.clickEl(`() => [...document.querySelectorAll('a[href*="/member/"]')].find((a) => a.getClientRects().length && /\/member\/\d+/.test(a.href))`)) {
+      await h.waitLoad();
+      if (await h.blocked()) return faved;
+      log('Vinted : boutique d’une vendeuse');
+      await h.scroll(ri(2, 4));
+      await sleep(rand(2500, 6000));
+      await h.send('Page.navigate', { url: before }).catch(() => {});
+      await h.waitLoad();
+    }
+  }
+  return faved;
+}
+
+async function vintedDeep(h, log, intensity = 'court') {
+  const searches = intensity === 'long' ? ri(3, 4) : intensity === 'normal' ? ri(2, 3) : ri(2, 2);
+  let favs = 0;
+  log('Vinted : fil d’accueil');
+  await h.goto('https://www.vinted.fr/');
+  await h.acceptConsent();
+  if (await h.blocked()) { log('Vinted demande une vérification — warm arrêté'); return; }
+  await h.scroll(ri(3, 6));
+  await h.wander(ri(1, 3));
+  // 1 annonce du fil d'accueil
+  if (await h.clickEl(VINTED_ITEM)) { if (await vintedLookItem(h, log, { canFav: favs < 1 })) favs++; }
+  for (const q of shuffle(VINTED_Q).slice(0, searches)) {
+    h.check();
+    log(`Vinted : recherche « ${q} »`);
+    await h.goto('https://www.vinted.fr/');
+    await sleep(rand(800, 1600));
+    const box = `() => document.querySelector('input#search_text, input[data-testid*="search-text"], input[name="search_text"], input[type="search"]')`;
+    if (await h.clickEl(box)) {
+      await h.eval(`(() => { const el = (${box})(); if (el && el.select) el.select(); })()`);
+      await h.type(q);
+      await sleep(rand(500, 1300));
+      await h.enter();
+      await h.waitLoad();
+    } else {
+      await h.goto('https://www.vinted.fr/catalog?search_text=' + encodeURIComponent(q));
+    }
+    if (await h.blocked()) return;
+    await h.scroll(ri(2, 4));
+    // Comme une vraie acheteuse : parfois un filtre prix ou un tri
+    if (Math.random() < 0.5) {
+      const u = new URL(await h.url());
+      if (/\/catalog/.test(u.pathname)) {
+        if (Math.random() < 0.5) u.searchParams.set('price_to', pick(PRICE_TO)); else u.searchParams.set('order', pick(ORDERS));
+        log('Vinted : filtre appliqué');
+        await h.goto(u.toString());
+        if (await h.blocked()) return;
+        await h.scroll(ri(1, 3));
+      }
+    }
+    const listUrl = await h.url();
+    for (let v = 0, n = ri(2, 4); v < n; v++) {
+      if (!(await h.clickEl(VINTED_ITEM))) break;
+      if (await vintedLookItem(h, log, { canFav: favs < 1 })) favs++;
+      if (VINTED_ITEM_PAGE.test(await h.url()) || !(await h.url()).startsWith(listUrl.split('?')[0])) {
+        await h.send('Page.navigate', { url: listUrl }).catch(() => {});
+        await h.waitLoad();
+      }
+      await h.scroll(ri(1, 2));
+    }
+  }
+  // Un tour par une catégorie, et parfois la page de ses favoris
+  if (Math.random() < 0.6 && (await h.clickEl(`() => { const l = [...document.querySelectorAll('a[href*="/catalog/"]')].filter((a) => a.getClientRects().length); return l[Math.floor(Math.random() * Math.min(l.length, 20))]; }`))) {
+    await h.waitLoad();
+    log('Vinted : tour dans une catégorie');
+    await h.scroll(ri(2, 5));
+  }
+  if (Math.random() < 0.3) {
+    await h.goto('https://www.vinted.fr/member/items/favourite_list');
+    await h.scroll(ri(1, 3));
+  }
+}
+
+async function runWarm(cdp, { log = () => {}, shouldStop, intensity = 'normal', focus = '' } = {}) {
   const { targetId } = await cdp.send('Target.createTarget', { url: 'about:blank' });
   const { sessionId } = await cdp.send('Target.attachToTarget', { targetId, flatten: true });
   await cdp.send('Page.enable', {}, sessionId).catch(() => {});
   await cdp.send('Page.bringToFront', {}, sessionId).catch(() => {});
   const h = new Human(cdp, sessionId, shouldStop);
+  if (focus === 'vinted') {
+    // Warm Vinted : 1 ou 2 sites ordinaires (cookies variés), puis une vraie session Vinted
+    const plan = [...shuffle(SITES).slice(0, ri(1, 2)).map((u) => () => randomSite(h, log, u)), () => vintedDeep(h, log, intensity)];
+    let done = 0;
+    for (const step of plan) {
+      try { await step(); done++; } catch (e) { if (e.message === 'arrêté') throw e; log(`étape ignorée : ${e.message}`); }
+      await sleep(rand(1500, 4000));
+    }
+    await cdp.send('Target.closeTarget', { targetId }).catch(() => {});
+    return { steps: done, total: plan.length };
+  }
   const others = shuffle(SITES).slice(0, intensity === 'long' ? 12 : intensity === 'court' ? 3 : 7);
   const steps = [
     () => leboncoin(h, log),
