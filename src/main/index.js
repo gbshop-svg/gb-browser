@@ -1043,7 +1043,9 @@ async function syncGbExtension() {
   // « Mode nuit » coché d'office + jeton de liaison (l'extension lit ce fichier à son démarrage)
   const writeFlag = () => { try { fs.writeFileSync(path.join(rec.path, 'gb-night.json'), JSON.stringify({ nightMode: true, token: rec.gbToken || null, base })); } catch {} };
   if (rec && rec.version === v.version && fs.existsSync(rec.path)) {
-    if (!rec.gbToken) { await ensureToken(); writeFlag(); }
+    if (!rec.gbToken) await ensureToken();
+    // toujours réécrit : « Mode nuit » coché d'office même si le fichier a disparu
+    writeFlag();
     return;
   }
   const res = await fetch(`${base}/api/gb/extension`, auth);
