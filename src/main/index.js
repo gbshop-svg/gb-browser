@@ -837,9 +837,16 @@ async function nightEnd() {
 
 // ── Page DotB au premier plan : c'est elle qui empêche Brave de mettre les onglets en veille ──
 const dotbHidden = new Map();
+// L'onglet à garder devant : l'onglet Vinted de DotB (vinted.fr/about?d=j — c'est lui qui empêche la mise en veille),
+// sinon la page DotB elle-même.
+const DOTB_VINTED_TAB = /^https:\/\/www\.vinted\.[a-z.]+\/about\?d=j/i;
+function dotbFrontTarget(targetInfos) {
+  const pages = targetInfos.filter((x) => x.type === 'page');
+  return pages.find((x) => DOTB_VINTED_TAB.test(x.url || '')) || pages.find((x) => (x.url || '').startsWith(dotbauto.DOTB_PAGE.split('?')[0]));
+}
 async function bringDotbFront(c) {
   const { targetInfos } = await c.send('Target.getTargets');
-  const t = targetInfos.find((x) => x.type === 'page' && x.url.startsWith(dotbauto.DOTB_PAGE.split('?')[0]));
+  const t = dotbFrontTarget(targetInfos);
   if (!t) return false;
   const { sessionId } = await c.send('Target.attachToTarget', { targetId: t.targetId, flatten: true });
   await c.send('Page.bringToFront', {}, sessionId).catch(() => {});
@@ -862,18 +869,20 @@ async function keepDotbFront() {
     try {
       c = await CDP.forPort(portOf(p));
       const { targetInfos } = await c.send('Target.getTargets');
-      const t = targetInfos.find((x) => x.type === 'page' && x.url.startsWith(dotbauto.DOTB_PAGE.split('?')[0]));
+      const t = dotbFrontTarget(targetInfos);
       if (!t) { dotbHidden.delete(id); continue; }
+      // DotB est en train de publier ou modifier une annonce : on ne touche à rien
+      if (targetInfos.some((x) => x.type === 'page' && /vinted\.[a-z.]+\/(items\/new|items\/\d+\/edit|upload|member\/items)/i.test(x.url || ''))) { dotbHidden.delete(id); continue; }
       const { sessionId } = await c.send('Target.attachToTarget', { targetId: t.targetId, flatten: true });
       const r = await c.send('Runtime.evaluate', { expression: 'document.visibilityState', returnByValue: true }, sessionId).catch(() => null);
       const hidden = !!(r && r.result && r.result.value === 'hidden');
       if (hidden) {
         const n = (dotbHidden.get(id) || 0) + 1;
         dotbHidden.set(id, n);
-        if (n >= 1) { // cachée : on la remet devant (contrôle toutes les 2 min)
+        if (n >= 2) { // cachée depuis 2 contrôles (~10 min) : on la remet devant
           await c.send('Page.bringToFront', {}, sessionId).catch(() => {});
           dotbHidden.delete(id);
-          log(`${pcode(p)} : page DotB remise au premier plan`, 'info');
+          log(`${pcode(p)} : onglet Vinted de DotB remis au premier plan`, 'info');
         }
       } else dotbHidden.delete(id);
       await c.send('Target.detachFromTarget', { sessionId }).catch(() => {});
@@ -1004,7 +1013,16 @@ async function syncGbExtension() {
   // « Mode nuit » coché d'office dans ce profil (l'extension lit ce fichier)
   try { fs.writeFileSync(path.join(rec.path, 'gb-night.json'), JSON.stringify({ nightMode: true })); } catch {}
   save(); broadcast();
-  log(`Extension Groupe Barbaray ${rec.version} prête pour le profil Sourcing (prise en compte à sa prochaine ouverture)`, 'success');
+  log(`Extension Groupe Barbaray ${rec.version} prête pour le profil Sourcing`, 'success');
+  // Profil Sourcing ouvert : on le relance pour charger la nouvelle version — jamais la nuit (il travaille),
+  // la nouvelle version sera de toute façon chargée à sa prochaine ouverture (minuit).
+  const sp = sourcingProfile();
+  if (sp && openSet.has(sp.id) && !inNight() && !busy.has(sp.id)) {
+    log(`${pcode(sp)} : relance pour charger l’extension ${rec.version}`, 'info');
+    await closeProfile(sp.id, { quiet: true }).catch(() => {});
+    await sleep(4000);
+    await openProfile(sp.id).catch(() => {});
+  }
 }
 
 async function scheduler() {
@@ -2613,10 +2631,10 @@ app.whenReady().then(() => {
   setInterval(() => dotbWatch().catch(() => {}), 180000);
   setInterval(() => pubWatch().catch(() => {}), 300000);
   setInterval(() => gbPush().catch(() => {}), 300000);
-  setInterval(() => keepDotbFront().catch(() => {}), 120000);
+  setInterval(() => keepDotbFront().catch(() => {}), 300000);
   setInterval(() => raiseTick().catch(() => {}), 10 * 60e3);
   setTimeout(() => syncGbExtension().catch(() => {}), 90e3);
-  setInterval(() => syncGbExtension().catch(() => {}), 6 * 3600e3);
+  setInterval(() => syncGbExtension().catch(() => {}), 30 * 60e3); // nouvelle version sur le site → installée en 30 min max
   // Nouvelles fenêtres ouvertes dans un profil : on leur remet l'icône Vinted
   setInterval(() => { for (const id of openSet) applyTaskbarIcon(id).catch(() => {}); }, 15000);
   setTimeout(() => gbPush().catch(() => {}), 45000);
