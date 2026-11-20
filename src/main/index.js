@@ -246,6 +246,12 @@ async function poll() {
 }
 
 // ── Lancement d'un profil ─────────────────────────────
+// Profil Sourcing SHEIN : Microsoft Edge normal (réglage « sourcingEdge », actif par défaut), dossier à part
+// pour ne pas mélanger avec le dossier Brave existant (on peut revenir à Brave à tout moment).
+const sourcingEdge = (p) => !!(p && p.sourcing && store.settings.sourcingEdge !== false && browsers.detectEdge());
+const udir = (p) => (sourcingEdge(p) ? p.dir + '-edge' : p.dir);
+const browserFor = (p) => (sourcingEdge(p) ? browsers.detectEdge() : browsers.detect(store.settings.browserPath));
+
 function buildArgs(p, extra = [], { disableFeatures = [], locale } = {}) {
   const loc = locale || FP.localeFor('FR');
   const feats = [...disableFeatures];
@@ -256,7 +262,7 @@ function buildArgs(p, extra = [], { disableFeatures = [], locale } = {}) {
   ].filter((a) => !a.endsWith('=false')) : [];
   if (store.settings.ecoRam !== false) feats.push('Translate', 'MediaRouter', 'OptimizationHints', 'OptimizationGuideModelDownloading', 'AutofillServerCommunication');
   return [
-    `--user-data-dir=${p.dir}`,
+    `--user-data-dir=${udir(p)}`,
     `--remote-debugging-port=${portOf(p)}`,
     '--no-first-run',
     '--no-default-browser-check',
@@ -310,7 +316,7 @@ function notify(title, body) {
 
 // N'ouvre que les pages demandées : pas de restauration de l'ancienne session (about:blank, warm…)
 function prepareSession(p) {
-  const prof = path.join(p.dir, 'Default');
+  const prof = path.join(udir(p), 'Default');
   try {
     for (const f of ['Sessions', 'Current Session', 'Current Tabs', 'Last Session', 'Last Tabs']) {
       fs.rmSync(path.join(prof, f), { recursive: true, force: true });
@@ -365,7 +371,7 @@ async function openProfile(id, { force = false, url = null, headless = false, no
   if (!p) return { ok: false, error: 'Profil introuvable' };
   if (!force && (openSet.has(id) || launching.has(id))) return { ok: true };
 
-  const b = browsers.detect(store.settings.browserPath);
+  const b = browserFor(p);
   if (!b) {
     log('Brave introuvable — indique le chemin de brave.exe dans Paramètres', 'error');
     return { ok: false, error: 'Brave introuvable. Installe Brave ou indique le chemin de brave.exe dans Paramètres.' };
@@ -374,12 +380,12 @@ async function openProfile(id, { force = false, url = null, headless = false, no
   if (force) {
     log(`${pcode(p)} : ouverture forcée (fermeture des processus restants, suppression des verrous)`, 'warn');
     await closeProfile(id, { quiet: true });
-    await browsers.killByUserDataDir(p.dir);
+    await browsers.killByUserDataDir(udir(p));
     await sleep(800);
-    browsers.removeLocks(p.dir);
+    browsers.removeLocks(udir(p));
   }
 
-  fs.mkdirSync(p.dir, { recursive: true });
+  fs.mkdirSync(udir(p), { recursive: true });
   const extra = [];
 
   // Proxy
@@ -435,7 +441,7 @@ async function openProfile(id, { force = false, url = null, headless = false, no
 
   launching.add(id);
   broadcast();
-  if (!headless) log(`${pcode(p)} ${p.name} : ouverture (${b.name}, port ${portOf(p)}${parsed ? ', proxy ' + proxy.label(parsed) : ', IP réelle'})`);
+  if (!headless) log(`${pcode(p)} ${p.name} : ouverture (${b.name}${sourcingEdge(p) ? ' sans empreinte modifiée' : ''}, port ${portOf(p)}${parsed ? ', proxy ' + proxy.label(parsed) : ', IP réelle'})`);
 
   let child;
   try {
@@ -501,15 +507,16 @@ async function applyTaskbarIcon(id) {
   if (!srcIco && store.settings.vintedIcon === false) return;
   const ico = srcIco || await iconFile();
   if (!ico) return;
-  const b = browsers.detect(store.settings.browserPath);
-  winicon.apply(r.child.pid, { ico, appId: `GB.Profil.${p.num}`, name: `${pcode(p)} ${p.name}`, cmd: b && b.path ? `"${b.path}" --user-data-dir="${p.dir}"` : '' });
+  const b = browserFor(p);
+  winicon.apply(r.child.pid, { ico, appId: `GB.Profil.${p.num}`, name: `${pcode(p)} ${p.name}`, cmd: b && b.path ? `"${b.path}" --user-data-dir="${udir(p)}"` : '' });
 }
 
 async function afterLaunch(id, pages, geo) {
   const p = findProfile(id);
   if (!(await waitAlive(portOf(p), 30000))) throw new Error('le navigateur ne répond pas');
   // 1) Empreinte + fuseau horaire, appliqués avant toute page
-  if (store.settings.fpEnabled !== false) {
+  //    (pas pour le profil Sourcing sous Edge : on garde la vraie empreinte d'un Edge normal)
+  if (store.settings.fpEnabled !== false && !sourcingEdge(p)) {
     const fp = await ensureFingerprint(p);
     try {
       const g = await new Guardian(portOf(p), { script: FP.injectionScript(fp), timezone: geo && geo.timezone }).start();
@@ -592,7 +599,7 @@ async function runDotbAuto(id, { force = false } = {}) {
 // Brave écrit exit_type = "Crashed" pendant qu'il tourne et "Normal" à une fermeture propre
 function exitedCleanly(p) {
   try {
-    const prefs = JSON.parse(fs.readFileSync(path.join(p.dir, 'Default', 'Preferences'), 'utf8'));
+    const prefs = JSON.parse(fs.readFileSync(path.join(udir(p), 'Default', 'Preferences'), 'utf8'));
     return prefs.profile && prefs.profile.exit_type === 'Normal';
   } catch { return true; }
 }
@@ -621,7 +628,7 @@ async function onProfileGone(id) {
   crashLog.set(id, [...recent, Date.now()]);
   notify('Profil relancé', `${pcode(p)} ${p.name} a planté : réouverture${p.dotbAuto ? ' et relance de DotB' : ''}.`);
   await sleep(5000);
-  browsers.removeLocks(p.dir);
+  browsers.removeLocks(udir(p));
   const r = await openProfile(id);
   log(r.ok ? `${pcode(p)} : relancé après plantage` : `${pcode(p)} : relance impossible — ${r.error}`, r.ok ? 'success' : 'error');
 }
@@ -644,7 +651,7 @@ async function closeProfile(id, { quiet = false, keepInList = false } = {}) {
   if (!closed) {
     const r = running.get(id);
     if (r && r.child && r.child.exitCode === null) { try { r.child.kill(); } catch {} }
-    await browsers.killByUserDataDir(p.dir);
+    await browsers.killByUserDataDir(udir(p));
   }
   const r = running.get(id);
   if (r && r.relay) r.relay.stop();
@@ -1774,7 +1781,7 @@ async function waitHeadlessExit(id) {
   launching.delete(id);
   openSet.delete(id);
   await sleep(500);
-  browsers.removeLocks(p.dir);
+  browsers.removeLocks(udir(p));
   broadcast();
 }
 
@@ -2674,7 +2681,7 @@ function setupIPC() {
 
   // Paramètres
   handle('settings:save', (data = {}) => {
-    const allowed = ['browserPath', 'profilesDir', 'startUrl', 'gbUrl', 'theme', 'dotbToken', 'proxyTimeout', 'warmIntensity', 'closeWelcome', 'scalencyDir', 'startUrls', 'fpEnabled', 'notify', 'ecoRam', 'autoWarm', 'allow3pCookies', 'autoPrudence', 'memorySaver', 'autoUpdate', 'morningCheck', 'pubAlert', 'gbKey', 'vintedIcon', 'shieldsOffVinted', 'autoStart', 'nightlyRestart', 'shieldsOffAll', 'nightShein', 'autoRaise', 'dotbRange', 'nightWarm'];
+    const allowed = ['browserPath', 'profilesDir', 'startUrl', 'gbUrl', 'theme', 'dotbToken', 'proxyTimeout', 'warmIntensity', 'closeWelcome', 'scalencyDir', 'startUrls', 'fpEnabled', 'notify', 'ecoRam', 'autoWarm', 'allow3pCookies', 'autoPrudence', 'memorySaver', 'autoUpdate', 'morningCheck', 'pubAlert', 'gbKey', 'vintedIcon', 'shieldsOffVinted', 'autoStart', 'nightlyRestart', 'shieldsOffAll', 'nightShein', 'autoRaise', 'dotbRange', 'nightWarm', 'sourcingEdge'];
     for (const k of allowed) if (k in data) store.settings[k] = data[k];
     if ('profilesDir' in data) {
       store.settings.profilesDir = data.profilesDir || DEFAULT_PROFILES_DIR;

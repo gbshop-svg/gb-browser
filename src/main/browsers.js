@@ -104,4 +104,17 @@ function removeLocks(userDataDir) {
   }
 }
 
-module.exports = { detect, braveUserDataDir, listBraveProfiles, killByUserDataDir, removeLocks };
+// Microsoft Edge « normal » (installé d'office sur Windows) : utilisé pour le profil Sourcing SHEIN,
+// sans empreinte modifiée — Brave + empreinte simulée ressemblent trop à un navigateur déguisé pour l'anti-robot de SHEIN.
+function detectEdge() {
+  if (process.platform !== 'win32') return null;
+  const pf = process.env['PROGRAMFILES'] || 'C:\\Program Files';
+  const pf86 = process.env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)';
+  for (const base of [pf86, pf]) {
+    const p = path.join(base, 'Microsoft', 'Edge', 'Application', 'msedge.exe');
+    if (fs.existsSync(p)) return { name: 'Edge', path: p };
+  }
+  return null;
+}
+
+module.exports = { detect, detectEdge, braveUserDataDir, listBraveProfiles, killByUserDataDir, removeLocks };
