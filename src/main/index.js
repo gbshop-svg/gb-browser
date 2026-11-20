@@ -315,7 +315,7 @@ function notify(title, body) {
 }
 
 // N'ouvre que les pages demandées : pas de restauration de l'ancienne session (about:blank, warm…)
-function prepareSession(p) {
+function prepareSession(p, locale) {
   const prof = path.join(udir(p), 'Default');
   try {
     for (const f of ['Sessions', 'Current Session', 'Current Tabs', 'Last Session', 'Last Tabs']) {
@@ -326,6 +326,9 @@ function prepareSession(p) {
     let prefs = {};
     if (fs.existsSync(prefFile)) prefs = JSON.parse(fs.readFileSync(prefFile, 'utf8'));
     prefs.session = { ...(prefs.session || {}), restore_on_startup: 5 };
+    // 2.9.10 : langues du profil = celles envoyées par --accept-lang (GB Analyseur 20/11 : Edge annonçait « fr » seul
+    // sur la 1re page d'une fenêtre puis « fr-FR,fr,en-US,en » ensuite — incohérence visible par les sites).
+    if (locale && locale.accept) prefs.intl = { ...(prefs.intl || {}), accept_languages: locale.accept, selected_languages: locale.accept };
     prefs.profile = prefs.profile || {};
     prefs.profile.exit_type = 'Normal';
     prefs.profile.exited_cleanly = true;
@@ -437,7 +440,7 @@ async function openProfile(id, { force = false, url = null, headless = false, no
   const pages = url ? [url] : p.startUrl ? [p.startUrl] : p.sourcing ? ['https://fr.shein.com/']
     : ((store.settings.startUrls && store.settings.startUrls.length) ? store.settings.startUrls : [store.settings.startUrl || 'https://www.vinted.fr/']);
   if (headless) { extra.push('--headless=new'); extra.push(url || 'about:blank'); }
-  else { extra.push('about:blank'); prepareSession(p); }
+  else { extra.push('about:blank'); prepareSession(p, locale); }
 
   launching.add(id);
   broadcast();
