@@ -1,7 +1,7 @@
 {
   "name": "gb-browser",
   "productName": "GB Browser",
-  "version": "2.9.10",
+  "version": "2.9.11",
   "description": "GB Browser - gestionnaire de profils anti-detect Groupe Barbaray (Brave isolé par compte Vinted, DotB intégré)",
   "main": "src/main/index.js",
   "author": "Groupe Barbaray",

@@ -353,7 +353,7 @@ function rowProfile(p) {
   const action = p.launching && !p.open
     ? `<button class="btn wait-btn" disabled><span class="spin"></span>Lancement…</button>`
     : p.open
-      ? `<button class="btn close-btn" data-act="close" data-id="${p.id}">${ic('square')}Fermer</button>`
+      ? `<button class="btn" data-act="show" data-id="${p.id}" title="Mettre la fenêtre du profil devant">${ic('play')}Afficher</button><button class="btn close-btn" data-act="close" data-id="${p.id}">${ic('square')}Fermer</button>`
       : `<button class="btn open-btn" data-act="open" data-id="${p.id}">${ic('play')}Ouvrir</button>`;
   return `<tr class="${S.selected.has(p.id) ? 'sel' : ''}" data-row="${p.id}">
     <td><input type="checkbox" data-sel="${p.id}" ${S.selected.has(p.id) ? 'checked' : ''}></td>
@@ -1408,6 +1408,7 @@ const ACTIONS = {
   },
   open: (el) => openProfiles([el.dataset.id]),
   close: (el) => gb.invoke('profile:close', [el.dataset.id]),
+  show: async (el) => { const r = await gb.invoke('profile:show', el.dataset.id); if (r && r.ok === false) toast(r.error || 'Impossible d’afficher', 'err'); },
   'add-tag': (el) => tagPopover(el, prof(el.dataset.id)),
   'rm-tag': (el) => {
     const p = prof(el.dataset.id);

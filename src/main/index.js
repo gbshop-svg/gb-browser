@@ -2376,6 +2376,27 @@ function setupIPC() {
     return { ok: errors.length === 0, count: ids.length, errors };
   });
   handle('profile:close', async (ids) => { await Promise.all(ids.map((id) => closeProfile(id))); return true; });
+  // 2.9.11 : « Afficher » — remet la fenêtre du profil au premier plan (plus besoin de la chercher)
+  handle('profile:show', async (id) => {
+    const p = findProfile(id);
+    if (!p || !openSet.has(id)) return { ok: false, error: 'Profil fermé' };
+    let c;
+    try {
+      c = await CDP.forPort(portOf(p));
+      const { targetInfos } = await c.send('Target.getTargets');
+      const pages = targetInfos.filter((x) => x.type === 'page' && !/^(chrome|devtools|chrome-extension):/.test(x.url || ''));
+      const t = (p.sourcing ? null : dotbFrontTarget(targetInfos)) || pages[0];
+      if (!t) return { ok: false, error: 'Aucun onglet' };
+      const w = await c.send('Browser.getWindowForTarget', { targetId: t.targetId }).catch(() => null);
+      if (w && w.windowId != null) {
+        await c.send('Browser.setWindowBounds', { windowId: w.windowId, bounds: { windowState: 'normal' } }).catch(() => {});
+      }
+      const { sessionId } = await c.send('Target.attachToTarget', { targetId: t.targetId, flatten: true });
+      await c.send('Page.bringToFront', {}, sessionId).catch(() => {});
+      await c.send('Target.detachFromTarget', { sessionId }).catch(() => {});
+      return { ok: true };
+    } finally { if (c) c.close(); }
+  });
   handle('profile:warm', (id) => warmProfile(id));
   handle('profile:folder', (id) => {
     const p = findProfile(id);
