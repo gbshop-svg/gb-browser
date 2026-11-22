@@ -815,7 +815,9 @@ async function nightStart() {
   nightRunning = true;
   try {
     const sp = sourcingProfile();
-    const ids = [...openSet].filter((id) => visible.has(id) && !headlessIds.has(id) && !(findProfile(id) || {}).sourcing);
+    // 22/11 (2.9.12) : tous les comptes ouverts, même ceux repris après un redémarrage de GB (pas dans « visible ») —
+    // sinon ils restaient ouverts toute la nuit et le warm de nuit les sautait.
+    const ids = [...openSet].filter((id) => !headlessIds.has(id) && !(findProfile(id) || {}).sourcing && !busy.has(id));
     store.nightClosed = [...new Set([...(store.nightClosed || []), ...ids])];
     save();
     log(`🌙 Mode nuit : fermeture de ${ids.length} compte(s) Vinted, ouverture du profil Sourcing SHEIN`, 'info');
@@ -951,13 +953,12 @@ async function raiseTick() {
     if (!res.ok) return;
     const { raises = [] } = await res.json();
     let done = 0;
+    // 2.9.11 : plus de limite par jour ni par passage — toutes les hausses en attente, une par une, à rythme humain
     for (const r of raises) {
-      if (done >= 3) break;
       const p = store.profiles.find((x) => r.dotbAccountId && String(x.dotbAccountId) === String(r.dotbAccountId));
       if (!p || p.sourcing || !openSet.has(p.id) || busy.has(p.id) || prudenceActive(p)) continue;
       if (!p.dotbStartedAt || Date.now() - Date.parse(p.dotbStartedAt) < 10 * 60e3) continue; // DotB d'abord
       const cnt = raisesToday();
-      if ((cnt[p.id] || 0) >= 6) continue;
       const out = await vintedRaisePrice(p, r).catch((e) => ({ ok: false, note: e.message }));
       cnt[p.id] = (cnt[p.id] || 0) + 1;
       save();
@@ -967,7 +968,7 @@ async function raiseTick() {
         body: JSON.stringify({ id: r.id, ...out }),
       }).catch(() => {});
       done++;
-      await sleep(rand(60e3, 150e3));
+      await sleep(rand(25e3, 70e3));
     }
   } catch { /* site injoignable : on réessaiera */ } finally { raising = false; }
 }
@@ -978,7 +979,8 @@ async function vintedRaisePrice(p, r) {
   const c = await CDP.forPort(portOf(p));
   let targetId = null;
   try {
-    ({ targetId } = await c.send('Target.createTarget', { url: 'about:blank' }));
+    // 2.9.11 : dans une fenêtre à part — l'onglet Vinted de DotB reste devant dans sa fenêtre, aucun changement d'onglet
+    ({ targetId } = await c.send('Target.createTarget', { url: 'about:blank', newWindow: true }));
     managedTargets.add(targetId);
     const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
     await c.send('Page.enable', {}, sessionId).catch(() => {});
@@ -996,23 +998,19 @@ async function vintedRaisePrice(p, r) {
     const cur = String(await h.eval(`(${FIND})().value`) || '');
     const curN = parseFloat(cur.replace(/[^\d,.]/g, '').replace(',', '.'));
     if (Number.isFinite(curN) && curN >= r.to - 0.001) return { ok: false, skipped: true, note: `déjà à ${curN} €`, before: curN };
-    if (Number.isFinite(curN) && r.to > curN * 1.35) return { ok: false, skipped: true, note: `hausse trop forte (${curN} → ${r.to} €)`, before: curN };
     const txt = (cur.includes(',') ? r.to.toFixed(2).replace('.', ',') : r.to.toFixed(2)).replace(/[.,]00$/, '');
+    // Uniquement de vrais clics et de vraies touches : clic dans le champ, Fin, effacer chiffre par chiffre, taper le prix
     await h.clickEl(FIND);
     await sleep(rand(300, 650));
-    await h.eval(`(() => { const el = (${FIND})(); el.focus(); el.select(); })()`);
-    await h.key('Backspace', 'Backspace', 8);
+    await h.key('End', 'End', 35);
+    for (let i = 0; i < cur.length + 1; i++) { await h.key('Backspace', 'Backspace', 8); await sleep(rand(60, 170)); }
     await sleep(rand(250, 500));
     await h.type(txt);
     await sleep(rand(700, 1300));
-    const typed = parseFloat(String(await h.eval(`(${FIND})().value`) || '').replace(',', '.'));
-    if (Math.abs(typed - r.to) > 0.001) {
-      // la frappe n'a pas pris : on remplit le champ comme le ferait le navigateur
-      await h.eval(`(() => { const el = (${FIND})(); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-        set.call(el, ${JSON.stringify(txt)}); el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); })()`);
-      await sleep(500);
-    }
-    await h.eval(`(${FIND})().blur()`);
+    const typed = parseFloat(String(await h.eval(`(${FIND})().value`) || '').replace(/[^\d,.]/g, '').replace(',', '.'));
+    if (Math.abs(typed - r.to) > 0.001) return { ok: false, note: `prix tapé non pris (${typed})`, before: curN };
+    // on quitte le champ avec la touche Tab (comme une personne), pas en code
+    await h.key('Tab', 'Tab', 9);
     await sleep(rand(600, 1200));
     const SUBMIT = `() => [...document.querySelectorAll('button, [role=button]')].filter((b) => b.offsetParent && !b.disabled)
       .find((b) => /upload-form-save|save-button|submit/i.test(b.getAttribute('data-testid') || '') || b.type === 'submit' && !/brouillon|draft|supprimer|annuler/i.test(b.innerText)
@@ -1528,6 +1526,7 @@ function gbAccountsPayload() {
       country: (p.ipHistory && p.ipHistory.length && p.ipHistory[p.ipHistory.length - 1].country) || null,
       views: p.vstats ? p.vstats.views : null, items: p.vstats ? p.vstats.items : null, favourites: p.vstats ? p.vstats.favs : null,
       publishedToday: p.dotbAccountId ? pubToday(p) : null,
+      lastWarm: p.lastWarm || null, lastNightWarm: p.lastNightWarm || null,
       restrictions: (p.restrictions || []).length, lastRestriction: lastR ? lastR.at : null,
       notes: h.main || null,
     };
