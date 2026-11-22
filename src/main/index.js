@@ -2391,8 +2391,13 @@ function setupIPC() {
       const t = (p.sourcing ? null : dotbFrontTarget(targetInfos)) || pages[0];
       if (!t) return { ok: false, error: 'Aucun onglet' };
       const w = await c.send('Browser.getWindowForTarget', { targetId: t.targetId }).catch(() => null);
+      // 2.9.14 : Windows refuse qu'une autre appli passe devant (la fenêtre clignote juste en jaune dans la barre des tâches).
+      // Réduire puis restaurer la fenêtre la fait vraiment revenir au premier plan.
       if (w && w.windowId != null) {
+        await c.send('Browser.setWindowBounds', { windowId: w.windowId, bounds: { windowState: 'minimized' } }).catch(() => {});
+        await sleep(350);
         await c.send('Browser.setWindowBounds', { windowId: w.windowId, bounds: { windowState: 'normal' } }).catch(() => {});
+        await sleep(150);
       }
       const { sessionId } = await c.send('Target.attachToTarget', { targetId: t.targetId, flatten: true });
       await c.send('Page.bringToFront', {}, sessionId).catch(() => {});
