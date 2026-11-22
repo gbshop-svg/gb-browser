@@ -997,7 +997,11 @@ async function vintedRaisePrice(p, r) {
     }
     const cur = String(await h.eval(`(${FIND})().value`) || '');
     const curN = parseFloat(cur.replace(/[^\d,.]/g, '').replace(',', '.'));
-    if (Number.isFinite(curN) && curN >= r.to - 0.001) return { ok: false, skipped: true, note: `déjà à ${curN} €`, before: curN };
+    // 2.9.13 : le site peut aussi demander une BAISSE (réalignement des prix) — jamais plus de −20 % d'un coup
+    if (r.down) {
+      if (Number.isFinite(curN) && curN <= r.to + 0.001) return { ok: false, skipped: true, note: `déjà à ${curN} €`, before: curN };
+      if (Number.isFinite(curN) && r.to < curN * 0.8) return { ok: false, skipped: true, note: `baisse trop forte (${curN} → ${r.to} €)`, before: curN };
+    } else if (Number.isFinite(curN) && curN >= r.to - 0.001) return { ok: false, skipped: true, note: `déjà à ${curN} €`, before: curN };
     const txt = (cur.includes(',') ? r.to.toFixed(2).replace('.', ',') : r.to.toFixed(2)).replace(/[.,]00$/, '');
     // Uniquement de vrais clics et de vraies touches : clic dans le champ, Fin, effacer chiffre par chiffre, taper le prix
     await h.clickEl(FIND);
