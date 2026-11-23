@@ -1685,7 +1685,10 @@ async function refreshVinted(id) {
     let res = await vintedApiCheck(portOf(p)).catch(() => null);
     if (!res) {
       const hasCookie = await readVintedLogin(portOf(p));
-      res = { logged: hasCookie ? null : false, how: 'cookie' }; // cookie présent = session à confirmer
+      // 2.9.16 (23/11) : sans réponse de l'API Vinted (pas d'onglet vinted.fr, page pas encore chargée après un
+      // redémarrage…), l'absence de cookie ne suffit plus à dire « déconnecté » : faux « Vinted déconnecté » sur
+      // jadounette18 après la mise à jour 2.9.15. Seul un 401 de l'API Vinted marque le compte déconnecté.
+      res = { logged: null, how: hasCookie ? 'cookie' : 'cookie absent (à confirmer)' };
     }
     const prev = p.vinted || {};
     p.vinted = { logged: res.logged, login: res.login || (res.logged === null ? prev.login : '') || '', how: res.how, at: new Date().toISOString() };
