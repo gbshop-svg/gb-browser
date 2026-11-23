@@ -1006,12 +1006,27 @@ async function vintedRaisePrice(p, r) {
     // Uniquement de vrais clics et de vraies touches : clic dans le champ, Fin, effacer chiffre par chiffre, taper le prix
     await h.clickEl(FIND);
     await sleep(rand(300, 650));
+    // 2.9.15 : le champ doit vraiment avoir le focus (sinon les touches partent dans le vide : « prix tapé non pris (ancien prix) »)
+    const hasFocus = () => h.eval(`document.activeElement === (${FIND})()`).catch(() => false);
+    if (!(await hasFocus())) { await h.eval(`(${FIND})().focus()`).catch(() => {}); await sleep(rand(200, 400)); }
+    const readVal = async () => parseFloat(String(await h.eval(`(${FIND})().value`) || '').replace(/[^\d,.]/g, '').replace(',', '.'));
     await h.key('End', 'End', 35);
     for (let i = 0; i < cur.length + 1; i++) { await h.key('Backspace', 'Backspace', 8); await sleep(rand(60, 170)); }
     await sleep(rand(250, 500));
     await h.type(txt);
     await sleep(rand(700, 1300));
-    const typed = parseFloat(String(await h.eval(`(${FIND})().value`) || '').replace(/[^\d,.]/g, '').replace(',', '.'));
+    let typed = await readVal();
+    if (Math.abs(typed - r.to) > 0.001) {
+      // Repli : tout sélectionner dans le champ puis insérer le texte comme une saisie du navigateur (événement « input » natif)
+      await h.eval(`(() => { const el = (${FIND})(); el.focus(); el.select(); })()`).catch(() => {});
+      await sleep(rand(200, 400));
+      await h.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8, nativeVirtualKeyCode: 8 }).catch(() => {});
+      await h.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8, nativeVirtualKeyCode: 8 }).catch(() => {});
+      await sleep(rand(250, 450));
+      await h.send('Input.insertText', { text: txt }).catch(() => {});
+      await sleep(rand(700, 1200));
+      typed = await readVal();
+    }
     if (Math.abs(typed - r.to) > 0.001) return { ok: false, note: `prix tapé non pris (${typed})`, before: curN };
     // on quitte le champ avec la touche Tab (comme une personne), pas en code
     await h.key('Tab', 'Tab', 9);
