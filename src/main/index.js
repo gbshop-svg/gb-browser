@@ -804,7 +804,7 @@ async function reopenAfterBoot() {
 //       l'extension Groupe Barbaray y vérifie les prix et source les manques.
 // 07h : le profil Sourcing se ferme, les comptes Vinted rouvrent un par un (DotB relancé).
 // ══════════════════════════════════════════════════════
-const NIGHT_FROM = 0, NIGHT_TO = 5; // 2.9.18 (24/11) : comptes rouverts à 5h (hausses de prix 5h–8h, avant les publications)
+const NIGHT_FROM = 0, NIGHT_TO = 4; // 2.9.20 (24/11) : comptes rouverts à 4h (hausses de prix 4h–7h, DotB en pause)
 const sourcingProfile = () => store.profiles.find((p) => p.sourcing && !p.closedByVinted);
 const nightOn = () => store.settings.nightShein !== false && !!sourcingProfile();
 const inNight = () => { const h = new Date().getHours(); return h >= NIGHT_FROM && h < NIGHT_TO; };
@@ -948,7 +948,7 @@ async function raiseTick() {
   if (!key || !base) return;
   const h = new Date().getHours();
   // 2.9.18 (24/11, Raphaël) : changements de prix UNIQUEMENT de 5h à 8h, jamais la journée — sauf un TEST demandé (à toute heure, comptes ouverts) — 2.9.19
-  const inWindow = h >= 5 && h < 8 && !(nightOn() && inNight());
+  const inWindow = h >= 4 && h < 7 && !(nightOn() && inNight()); // 2.9.20 : 4h–7h, tant que DotB est en pause
   raising = true;
   try {
     const res = await fetch(`${base}/api/gb/price-raises`, { headers: { Authorization: `Bearer ${key}` } });
@@ -961,7 +961,7 @@ async function raiseTick() {
     for (const r of raises) {
       const p = store.profiles.find((x) => r.dotbAccountId && String(x.dotbAccountId) === String(r.dotbAccountId));
       if (!p || p.sourcing || !openSet.has(p.id) || busy.has(p.id) || prudenceActive(p)) continue;
-      if (!p.dotbStartedAt || Date.now() - Date.parse(p.dotbStartedAt) < 10 * 60e3) continue; // DotB d'abord
+      // 2.9.20 (24/11, Raphaël) : plus d'attente « DotB d'abord » — les prix se changent quand DotB est en pause (5h–8h), sinon ça pose problème
       const cnt = raisesToday();
       const out = await vintedRaisePrice(p, r).catch((e) => ({ ok: false, note: e.message }));
       cnt[p.id] = (cnt[p.id] || 0) + 1;
