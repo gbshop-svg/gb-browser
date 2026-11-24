@@ -804,7 +804,7 @@ async function reopenAfterBoot() {
 //       l'extension Groupe Barbaray y vérifie les prix et source les manques.
 // 07h : le profil Sourcing se ferme, les comptes Vinted rouvrent un par un (DotB relancé).
 // ══════════════════════════════════════════════════════
-const NIGHT_FROM = 0, NIGHT_TO = 7;
+const NIGHT_FROM = 0, NIGHT_TO = 6; // 2.9.17 (24/11) : comptes rouverts à 6h (hausses de prix 6h–8h, avant les publications)
 const sourcingProfile = () => store.profiles.find((p) => p.sourcing && !p.closedByVinted);
 const nightOn = () => store.settings.nightShein !== false && !!sourcingProfile();
 const inNight = () => { const h = new Date().getHours(); return h >= NIGHT_FROM && h < NIGHT_TO; };
@@ -835,7 +835,8 @@ async function nightEnd() {
   nightRunning = true;
   try {
     const sp = sourcingProfile();
-    if (sp && openSet.has(sp.id)) { await closeProfile(sp.id, { quiet: true }).catch(() => {}); await sleep(5000); }
+    // 2.9.17 : le profil Sourcing reste ouvert la journée (vérification des prix en continu) sauf si « sourcingDay » est coupé
+    if (sp && openSet.has(sp.id) && store.settings.sourcingDay === false) { await closeProfile(sp.id, { quiet: true }).catch(() => {}); await sleep(5000); }
     const ids = (store.nightClosed && store.nightClosed.length ? store.nightClosed : (store.keepOpen || []))
       .filter((id) => findProfile(id) && !findProfile(id).sourcing);
     log(`☀️ Fin de nuit : réouverture de ${ids.length} compte(s) Vinted`, 'info');
@@ -946,7 +947,7 @@ async function raiseTick() {
   const key = store.settings.gbKey, base = (store.settings.gbUrl || '').replace(/\/+$/, '');
   if (!key || !base) return;
   const h = new Date().getHours();
-  if (h < 8 || h >= 21 || (nightOn() && inNight())) return;
+  if (h < 6 || h >= 21 || (nightOn() && inNight())) return; // 2.9.17 : dès 6h (comptes rouverts à 6h)
   raising = true;
   try {
     const res = await fetch(`${base}/api/gb/price-raises`, { headers: { Authorization: `Bearer ${key}` } });
@@ -1034,13 +1035,26 @@ async function vintedRaisePrice(p, r) {
     const SUBMIT = `() => [...document.querySelectorAll('button, [role=button]')].filter((b) => b.offsetParent && !b.disabled)
       .find((b) => /upload-form-save|save-button|submit/i.test(b.getAttribute('data-testid') || '') || b.type === 'submit' && !/brouillon|draft|supprimer|annuler/i.test(b.innerText)
         || /^(enregistrer|sauvegarder|mettre à jour|valider|save)/i.test((b.innerText || '').trim()) && !/brouillon|draft/i.test(b.innerText))`;
-    if (!(await h.clickEl(SUBMIT))) return { ok: false, note: 'bouton « Enregistrer » introuvable', before: curN };
+    // 2.9.17 (analyse du 24/11) : le vrai bouton est « Valider » dans la barre du bas du formulaire (div…form-actions)
+    const SUBMIT2 = `() => [...document.querySelectorAll('[class*="form-actions" i] button, [class*="form-actions" i] [role=button]')].filter((b) => b.offsetParent && !b.disabled)
+      .find((b) => /^(valider|enregistrer|sauvegarder|mettre à jour|save)/i.test((b.innerText || '').trim()))`;
+    const hasForm = await h.eval(`!!(${SUBMIT2})()`).catch(() => false);
+    if (!(await h.clickEl(hasForm ? SUBMIT2 : SUBMIT))) return { ok: false, note: 'bouton « Valider » introuvable', before: curN };
     for (let i = 0; i < 25; i++) {
       await sleep(800);
       const u = String(await h.url() || '');
       if (!/\/edit/.test(u)) return { ok: true, before: Number.isFinite(curN) ? curN : undefined, after: r.to };
     }
     const err = await h.eval(`[...document.querySelectorAll('[class*="error" i], [role=alert]')].map((e) => e.innerText.trim()).filter(Boolean).join(' | ').slice(0, 150)`).catch(() => '');
+    // 2.9.17 : pas de changement de page visible → on vérifie pour de vrai en rechargeant la fiche de modification
+    try {
+      await h.goto(`https://www.vinted.fr/items/${Number(r.vintedId)}/edit`);
+      await h.waitLoad(20000);
+      let now = NaN;
+      for (let i = 0; i < 15 && !Number.isFinite(now); i++) { now = await readVal().catch(() => NaN); if (!Number.isFinite(now)) await sleep(700); }
+      if (Number.isFinite(now) && Math.abs(now - r.to) <= 0.001) return { ok: true, before: Number.isFinite(curN) ? curN : undefined, after: r.to, note: 'vérifié après rechargement' };
+      if (Number.isFinite(now)) return { ok: false, note: `prix toujours à ${now} € après « Valider »${err ? ` : ${err}` : ''}`, before: curN };
+    } catch { /* on garde l'erreur d'origine */ }
     return { ok: false, note: `enregistrement non confirmé${err ? ` : ${err}` : ''}`, before: curN };
   } finally {
     if (targetId) await c.send('Target.closeTarget', { targetId }).catch(() => {});
@@ -1155,6 +1169,15 @@ async function scheduler() {
     if (nightOn() && !nightRunning) {
       if (inNight() && store.nightStartedDay !== d) { store.nightStartedDay = d; save(); nightStart().catch((e) => log(`Mode nuit : ${e.message}`, 'error')); }
       else if (new Date().getHours() >= NIGHT_TO && store.nightStartedDay === d && store.nightEndedDay !== d) { store.nightEndedDay = d; save(); nightEnd().catch((e) => log(`Fin de nuit : ${e.message}`, 'error')); }
+    }
+    // 2.9.17 : profil Sourcing ouvert aussi la journée (vérification des prix en continu par l'extension)
+    if (store.settings.sourcingDay !== false && nightOn() && !inNight() && !nightRunning) {
+      const sp = sourcingProfile();
+      if (sp && !openSet.has(sp.id) && !launching.has(sp.id) && !busy.has(sp.id) && Date.now() - (store.sourcingDayTry || 0) > 15 * 60e3) {
+        store.sourcingDayTry = Date.now();
+        log(`${pcode(sp)} : ouverture du profil Sourcing (vérification des prix en journée)`, 'info');
+        openProfile(sp.id, { url: 'https://fr.shein.com/' }).catch(() => {});
+      }
     }
     if (nightWarmOn() && inNight() && !nightRunning) nightWarmTick().catch((e) => log(`Warm de nuit : ${e.message}`, 'error'));
     if (store.settings.nightlyRestart !== false && store.lastNightly !== d && new Date().getHours() === 4) {
