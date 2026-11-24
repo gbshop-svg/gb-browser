@@ -804,7 +804,7 @@ async function reopenAfterBoot() {
 //       l'extension Groupe Barbaray y vérifie les prix et source les manques.
 // 07h : le profil Sourcing se ferme, les comptes Vinted rouvrent un par un (DotB relancé).
 // ══════════════════════════════════════════════════════
-const NIGHT_FROM = 0, NIGHT_TO = 6; // 2.9.17 (24/11) : comptes rouverts à 6h (hausses de prix 6h–8h, avant les publications)
+const NIGHT_FROM = 0, NIGHT_TO = 5; // 2.9.18 (24/11) : comptes rouverts à 5h (hausses de prix 5h–8h, avant les publications)
 const sourcingProfile = () => store.profiles.find((p) => p.sourcing && !p.closedByVinted);
 const nightOn = () => store.settings.nightShein !== false && !!sourcingProfile();
 const inNight = () => { const h = new Date().getHours(); return h >= NIGHT_FROM && h < NIGHT_TO; };
@@ -947,7 +947,7 @@ async function raiseTick() {
   const key = store.settings.gbKey, base = (store.settings.gbUrl || '').replace(/\/+$/, '');
   if (!key || !base) return;
   const h = new Date().getHours();
-  if (h < 6 || h >= 21 || (nightOn() && inNight())) return; // 2.9.17 : dès 6h (comptes rouverts à 6h)
+  if (h < 5 || h >= 8 || (nightOn() && inNight())) return; // 2.9.18 (24/11, Raphaël) : changements de prix UNIQUEMENT de 5h à 8h, jamais la journée
   raising = true;
   try {
     const res = await fetch(`${base}/api/gb/price-raises`, { headers: { Authorization: `Bearer ${key}` } });
