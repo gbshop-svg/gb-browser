@@ -947,12 +947,15 @@ async function raiseTick() {
   const key = store.settings.gbKey, base = (store.settings.gbUrl || '').replace(/\/+$/, '');
   if (!key || !base) return;
   const h = new Date().getHours();
-  if (h < 5 || h >= 8 || (nightOn() && inNight())) return; // 2.9.18 (24/11, Raphaël) : changements de prix UNIQUEMENT de 5h à 8h, jamais la journée
+  // 2.9.18 (24/11, Raphaël) : changements de prix UNIQUEMENT de 5h à 8h, jamais la journée — sauf un TEST demandé (à toute heure, comptes ouverts) — 2.9.19
+  const inWindow = h >= 5 && h < 8 && !(nightOn() && inNight());
   raising = true;
   try {
     const res = await fetch(`${base}/api/gb/price-raises`, { headers: { Authorization: `Bearer ${key}` } });
     if (!res.ok) return;
-    const { raises = [] } = await res.json();
+    const { raises: all = [] } = await res.json();
+    const raises = inWindow ? all : all.filter((r) => r.test);
+    if (!raises.length) return;
     let done = 0;
     // 2.9.11 : plus de limite par jour ni par passage — toutes les hausses en attente, une par une, à rythme humain
     for (const r of raises) {
