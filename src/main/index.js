@@ -952,9 +952,11 @@ async function raiseTick() {
   if (!key || !base) return;
   const h = new Date().getHours();
   // 2.9.18 (24/11, Raphaël) : changements de prix UNIQUEMENT de 5h à 8h, jamais la journée — sauf un TEST demandé (à toute heure, comptes ouverts) — 2.9.19
-  const inWindow = h >= 4 && h < 7 && !(nightOn() && inNight()); // 2.9.20 : 4h–7h, tant que DotB est en pause
+  // 2.9.22 (25/11, Raphaël) : les prix se changent EN JOURNÉE (10h–19h), entre les publications DotB (le site retire les comptes
+  // qui publient dans les 15 min), à un rythme calme ; plus jamais la nuit.
+  const inWindow = h >= 10 && h < 19;
   // 2.9.21 : on attend que la fin de nuit ait rouvert les comptes (sinon on ouvrirait/fermerait en même temps qu'elle)
-  if (inWindow && (nightRunning || (nightOn() && store.nightEndedDay !== today()))) return;
+  if (nightRunning) return;
   raising = true; raisingSince = Date.now();
   const openedForRaise = new Set(); // 2.9.21 : comptes ouverts spécialement pour changer les prix (refermés à la fin)
   try {
@@ -995,7 +997,9 @@ async function raiseTick() {
         body: JSON.stringify({ id: r.id, ...out }),
       }).catch(() => {});
       done++;
-      await sleep(rand(25e3, 70e3));
+      // 2.9.22 : rythme calme — 3 à 6 min entre deux changements ; un passage s'arrête après 20 min (le suivant reprend)
+      if (Date.now() - raisingSince > 20 * 60e3) break;
+      await sleep(r.test ? rand(25e3, 70e3) : rand(180e3, 360e3));
     }
   } catch { /* site injoignable : on réessaiera */ } finally {
     for (const id of openedForRaise) {
@@ -1245,7 +1249,7 @@ async function scheduler() {
       const inPlan = day && day <= PLAN_DAYS;
       if (p.sourcing || (!p.autoWarm && !inPlan)) continue;
       if (nightWarmOn()) continue; // mode nuit : le warm se fait la nuit (nightWarmTick), pas en journée
-      if (nightOn() && !inPlan) continue; // 2.9.21 : plus de warm des comptes établis (ni nuit ni jour) ; seuls les comptes neufs (plan 7 j) chauffent, en journée
+      if (store.settings.warmPaused !== false) continue; // 2.9.21 (25/11, Raphaël : « mets en pause les warmers ») : AUCUN warm automatique, même plan 7 j (réglage warmPaused=false pour reprendre)
       if (p.lastWarm && p.lastWarm.slice(0, 10) === d) continue;
       if (!p.nextWarmAt || p.nextWarmAt.slice(0, 10) !== d) { p.nextWarmAt = pickWarmTime(d); save(); }
       if (now < Date.parse(p.nextWarmAt) || busy.has(p.id)) continue;
@@ -2787,7 +2791,7 @@ function setupIPC() {
 
   // Paramètres
   handle('settings:save', (data = {}) => {
-    const allowed = ['browserPath', 'profilesDir', 'startUrl', 'gbUrl', 'theme', 'dotbToken', 'proxyTimeout', 'warmIntensity', 'closeWelcome', 'scalencyDir', 'startUrls', 'fpEnabled', 'notify', 'ecoRam', 'autoWarm', 'allow3pCookies', 'autoPrudence', 'memorySaver', 'autoUpdate', 'morningCheck', 'pubAlert', 'gbKey', 'vintedIcon', 'shieldsOffVinted', 'autoStart', 'nightlyRestart', 'shieldsOffAll', 'nightShein', 'autoRaise', 'dotbRange', 'nightWarm', 'sourcingEdge'];
+    const allowed = ['browserPath', 'profilesDir', 'startUrl', 'gbUrl', 'theme', 'dotbToken', 'proxyTimeout', 'warmIntensity', 'warmPaused', 'closeWelcome', 'scalencyDir', 'startUrls', 'fpEnabled', 'notify', 'ecoRam', 'autoWarm', 'allow3pCookies', 'autoPrudence', 'memorySaver', 'autoUpdate', 'morningCheck', 'pubAlert', 'gbKey', 'vintedIcon', 'shieldsOffVinted', 'autoStart', 'nightlyRestart', 'shieldsOffAll', 'nightShein', 'autoRaise', 'dotbRange', 'nightWarm', 'sourcingEdge'];
     for (const k of allowed) if (k in data) store.settings[k] = data[k];
     if ('profilesDir' in data) {
       store.settings.profilesDir = data.profilesDir || DEFAULT_PROFILES_DIR;
