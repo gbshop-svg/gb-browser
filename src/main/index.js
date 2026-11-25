@@ -1013,6 +1013,7 @@ async function raiseTick() {
 }
 
 async function vintedRaisePrice(p, r) {
+  let offDialog = null;
   busy.set(p.id, 'Prix Vinted…');
   broadcast();
   const c = await CDP.forPort(portOf(p));
@@ -1023,6 +1024,11 @@ async function vintedRaisePrice(p, r) {
     managedTargets.add(targetId);
     const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
     await c.send('Page.enable', {}, sessionId).catch(() => {});
+    // 2.9.23 (25/11) : la fenêtre « Quitter le site Web ? » (modifications non enregistrées) bloquait la fenêtre de prix :
+    // on l'accepte toute seule, et on retire l'alerte de la page avant de recharger / fermer.
+    offDialog = c.on((m) => {
+      if (m.method === 'Page.javascriptDialogOpening' && m.sessionId === sessionId) c.send('Page.handleJavaScriptDialog', { accept: true }, sessionId).catch(() => {});
+    });
     await c.send('Page.bringToFront', {}, sessionId).catch(() => {}); // les clics ne passent pas sur un onglet caché
     const h = new warm.Human(c, sessionId);
     await h.goto(process.env.GB_TEST_EDIT_URL || `https://www.vinted.fr/items/${Number(r.vintedId)}/edit`);
@@ -1086,6 +1092,7 @@ async function vintedRaisePrice(p, r) {
     const err = await h.eval(`[...document.querySelectorAll('[class*="error" i], [role=alert]')].map((e) => e.innerText.trim()).filter(Boolean).join(' | ').slice(0, 150)`).catch(() => '');
     // 2.9.17 : pas de changement de page visible → on vérifie pour de vrai en rechargeant la fiche de modification
     try {
+      await h.eval('window.onbeforeunload = null; true').catch(() => {});
       await h.goto(`https://www.vinted.fr/items/${Number(r.vintedId)}/edit`);
       await h.waitLoad(20000);
       let now = NaN;
@@ -1095,6 +1102,7 @@ async function vintedRaisePrice(p, r) {
     } catch { /* on garde l'erreur d'origine */ }
     return { ok: false, note: `enregistrement non confirmé${err ? ` : ${err}` : ''}`, before: curN };
   } finally {
+    if (typeof offDialog === 'function') setTimeout(offDialog, 3000);
     if (targetId) await c.send('Target.closeTarget', { targetId }).catch(() => {});
     await sleep(800);
     await bringDotbFront(c).catch(() => {});
