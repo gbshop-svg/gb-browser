@@ -853,7 +853,8 @@ async function nightEnd() {
 // ── Warm de nuit (00h05 → ~02h) : DotB est en pause nocturne, les comptes Vinted sont fermés.
 // Chaque compte est rouvert seul (sans DotB), fait une vraie session Vinted, puis se referme.
 // Pas plus tard que 02h : une session à 4h du matin ne ressemble à personne.
-const nightWarmOn = () => nightOn() && store.settings.nightWarm !== false;
+// 2.9.21 (25/11, Raphaël : « enlève la chauffe la nuit ») : warm de nuit COUPÉ par défaut (il faut le recocher pour le remettre)
+const nightWarmOn = () => nightOn() && store.settings.nightWarm === true;
 const localDay = () => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`; };
 let nightWarmBusy = false;
 async function nightWarmTick() {
@@ -936,34 +937,56 @@ async function keepDotbFront() {
 // Le site prépare la liste ; GB l'applique de 8h à 21h, dans le bon profil, au calme :
 // 3 par passage max, 6 par compte et par jour, jamais de baisse, jamais plus de +35 %.
 // ══════════════════════════════════════════════════════
-let raising = false;
+let raising = false, raisingSince = 0;
+let raiseDiag = null; // 2.9.21 : résumé du dernier passage, envoyé au site au passage suivant (vu par Claude)
 function raisesToday() {
   const d = today();
   if (store.raiseDay !== d) { store.raiseDay = d; store.raiseCount = {}; }
   return store.raiseCount;
 }
 async function raiseTick() {
+  // 2.9.21 : garde-fou — un passage bloqué (page Vinted figée) ne bloque plus les suivants plus de 25 min
+  if (raising && Date.now() - raisingSince > 25 * 60e3) { log('Prix Vinted : passage précédent bloqué, on repart', 'warn'); raising = false; }
   if (raising || store.settings.autoRaise === false) return;
   const key = store.settings.gbKey, base = (store.settings.gbUrl || '').replace(/\/+$/, '');
   if (!key || !base) return;
   const h = new Date().getHours();
   // 2.9.18 (24/11, Raphaël) : changements de prix UNIQUEMENT de 5h à 8h, jamais la journée — sauf un TEST demandé (à toute heure, comptes ouverts) — 2.9.19
   const inWindow = h >= 4 && h < 7 && !(nightOn() && inNight()); // 2.9.20 : 4h–7h, tant que DotB est en pause
-  raising = true;
+  // 2.9.21 : on attend que la fin de nuit ait rouvert les comptes (sinon on ouvrirait/fermerait en même temps qu'elle)
+  if (inWindow && (nightRunning || (nightOn() && store.nightEndedDay !== today()))) return;
+  raising = true; raisingSince = Date.now();
+  const openedForRaise = new Set(); // 2.9.21 : comptes ouverts spécialement pour changer les prix (refermés à la fin)
   try {
-    const res = await fetch(`${base}/api/gb/price-raises`, { headers: { Authorization: `Bearer ${key}` } });
+    const res = await fetch(`${base}/api/gb/price-raises${raiseDiag ? `?diag=${encodeURIComponent(JSON.stringify(raiseDiag).slice(0, 1500))}` : ''}`, { headers: { Authorization: `Bearer ${key}` } });
     if (!res.ok) return;
     const { raises: all = [] } = await res.json();
     const raises = inWindow ? all : all.filter((r) => r.test);
+    const dg = raiseDiag = { at: new Date().toISOString(), version: app.getVersion(), inWindow, recus: all.length, a_faire: raises.length, faits: 0, echecs: 0, ignores: 0, sans_profil: 0, prudence: 0, occupe: 0, ouverts_special: 0, ouverture_ko: 0 };
     if (!raises.length) return;
     let done = 0;
     // 2.9.11 : plus de limite par jour ni par passage — toutes les hausses en attente, une par une, à rythme humain
     for (const r of raises) {
       const p = store.profiles.find((x) => r.dotbAccountId && String(x.dotbAccountId) === String(r.dotbAccountId));
-      if (!p || p.sourcing || !openSet.has(p.id) || busy.has(p.id) || prudenceActive(p)) continue;
+      if (!p || p.sourcing || p.closedByVinted) { dg.sans_profil++; continue; }
+      if (busy.has(p.id)) { dg.occupe++; continue; }
+      if (prudenceActive(p)) { dg.prudence++; continue; }
+      // 2.9.21 (25/11, Raphaël) : compte fermé (mode nuit…) → GB l'ouvre SPÉCIALEMENT pour changer les prix, sans DotB,
+      // puis le referme à la fin du passage. Seulement dans le créneau 4h–7h (un test ne force jamais l'ouverture).
+      if (!openSet.has(p.id)) {
+        if ((!inWindow && !r.test) || launching.has(p.id)) continue; // 2.9.21 : un TEST (bouton du site) ouvre aussi le compte s'il est fermé
+        if (!openedForRaise.has(p.id)) {
+        log(`${pcode(p)} : ouverture spéciale pour changer les prix (sans DotB)`, 'info');
+        const o = await openProfile(p.id, { noDotb: true }).catch((e) => ({ ok: false, error: e.message }));
+        if (!o || o.ok === false || !openSet.has(p.id)) { dg.ouverture_ko++; log(`${pcode(p)} : ouverture impossible pour les prix — ${(o && o.error) || '?'}`, 'warn'); continue; }
+        openedForRaise.add(p.id); dg.ouverts_special++;
+        await sleep(15000);
+        }
+      }
       // 2.9.20 (24/11, Raphaël) : plus d'attente « DotB d'abord » — les prix se changent quand DotB est en pause (5h–8h), sinon ça pose problème
       const cnt = raisesToday();
       const out = await vintedRaisePrice(p, r).catch((e) => ({ ok: false, note: e.message }));
+      if (out.ok) dg.faits++; else if (out.skipped) dg.ignores++; else dg.echecs++;
       cnt[p.id] = (cnt[p.id] || 0) + 1;
       save();
       log(`${pcode(p)} : prix Vinted « ${String(r.title).slice(0, 40)} » — ${out.ok ? `${out.before ?? '?'} € → ${r.to} €` : out.skipped ? `inchangé (${out.note})` : `échec (${out.note})`}`, out.ok ? 'success' : out.skipped ? 'info' : 'warn');
@@ -974,7 +997,13 @@ async function raiseTick() {
       done++;
       await sleep(rand(25e3, 70e3));
     }
-  } catch { /* site injoignable : on réessaiera */ } finally { raising = false; }
+  } catch { /* site injoignable : on réessaiera */ } finally {
+    for (const id of openedForRaise) {
+      // refermé seulement si personne d'autre ne l'a repris entre-temps (fin de nuit, DotB…)
+      if (openSet.has(id) && !busy.has(id) && !(store.keepOpen || []).includes(id)) { await closeProfile(id, { quiet: true, keepInList: true }).catch(() => {}); await sleep(2500); }
+    }
+    raising = false;
+  }
 }
 
 async function vintedRaisePrice(p, r) {
@@ -1216,6 +1245,7 @@ async function scheduler() {
       const inPlan = day && day <= PLAN_DAYS;
       if (p.sourcing || (!p.autoWarm && !inPlan)) continue;
       if (nightWarmOn()) continue; // mode nuit : le warm se fait la nuit (nightWarmTick), pas en journée
+      if (nightOn() && !inPlan) continue; // 2.9.21 : plus de warm des comptes établis (ni nuit ni jour) ; seuls les comptes neufs (plan 7 j) chauffent, en journée
       if (p.lastWarm && p.lastWarm.slice(0, 10) === d) continue;
       if (!p.nextWarmAt || p.nextWarmAt.slice(0, 10) !== d) { p.nextWarmAt = pickWarmTime(d); save(); }
       if (now < Date.parse(p.nextWarmAt) || busy.has(p.id)) continue;

@@ -942,7 +942,7 @@ function pageSettings() {
           <div class="setrow"><div class="st"><b>Mode nuit SHEIN (00h–07h)</b><span>DotB est en pause la nuit : à 00h, GB ferme les comptes Vinted et ouvre le profil « Sourcing SHEIN » (⋯ › Plus d’options) ; l’extension Groupe Barbaray y vérifie les prix (rotation 48 h) et source les manques jusqu’à 05h30. À 07h, les comptes rouvrent un par un avec DotB. Remplace le redémarrage de 4 h.</span></div>
             <div class="toggle ${s.nightShein !== false ? 'on' : ''}" data-act="tg-setting" data-k="nightShein"></div></div>
           <div class="setrow"><div class="st"><b>Warm Vinted la nuit (00h05–02h)</b><span>Avec le mode nuit, le warm ne se fait plus en journée : chaque compte Vinted est rouvert seul, sans DotB (en pause la nuit), fait une vraie session d’acheteuse sur Vinted (fil d’accueil, recherches avec filtres, photos feuilletées, boutiques de vendeuses, parfois 1 favori ; jamais de message ni d’achat), puis se referme. Un compte après l’autre, et rien après 02h.</span></div>
-            <div class="toggle ${s.nightWarm !== false ? 'on' : ''}" data-act="tg-setting" data-k="nightWarm"></div></div>
+            <div class="toggle ${s.nightWarm === true ? 'on' : ''}" data-act="tg-setting" data-k="nightWarm"></div></div>
           <div class="setrow"><div class="st"><b>Sourcing SHEIN dans Microsoft Edge</b><span>Le profil Sourcing s’ouvre dans un Edge normal (vraie empreinte, pas de Brave) avec son proxy et l’extension Groupe Barbaray. Moins suspect pour l’anti-robot de SHEIN. Désactive pour revenir à Brave.</span></div>
             <div class="toggle ${s.sourcingEdge !== false ? 'on' : ''}" data-act="tg-setting" data-k="sourcingEdge"></div></div>
           <div class="setrow"><div class="st"><b>Monter les prix Vinted quand SHEIN augmente</b><span>De 8h à 21h, GB applique les hausses préparées par le site sur les annonces déjà en ligne, dans le bon compte : jamais de baisse, +35 % maximum, 6 par compte et par jour, puis il remet la page DotB au premier plan.</span></div>
@@ -1663,7 +1663,7 @@ const ACTIONS = {
       { label: 'Supprimer', icon: 'trash', danger: true, run: () => { if (confirm(`Supprimer ${a.pseudo || a.email} de la liste ?`)) gb.invoke('acc:delete', a.id); } },
     ]);
   },
-  'tg-setting': (el) => gb.invoke('settings:save', { [el.dataset.k]: S.data.settings[el.dataset.k] === false }),
+  'tg-setting': (el) => gb.invoke('settings:save', { [el.dataset.k]: el.dataset.k === 'nightWarm' ? S.data.settings.nightWarm !== true : S.data.settings[el.dataset.k] === false }), // 2.9.21 : warm de nuit coupé par défaut
   'save-whours': async () => {
     const from = Math.max(0, Math.min(23, +$('#set-wfrom').value || 0)), to = Math.max(from + 1, Math.min(24, +$('#set-wto').value || 24));
     await gb.invoke('settings:save', { autoWarm: { from, to } }); delete S.drafts['set-wfrom']; delete S.drafts['set-wto']; toast('Plage enregistrée', 'ok');
