@@ -105,15 +105,23 @@ class Human {
     const cx1 = sx + (x - sx) * rand(0.2, 0.4) + rand(-80, 80), cy1 = sy + (y - sy) * rand(0.2, 0.4) + rand(-80, 80);
     const cx2 = sx + (x - sx) * rand(0.6, 0.8) + rand(-60, 60), cy2 = sy + (y - sy) * rand(0.6, 0.8) + rand(-60, 60);
     const dist = Math.hypot(x - sx, y - sy);
-    const steps = Math.max(8, Math.min(45, Math.round(dist / rand(12, 22))));
+    // 2.9.23 (25/11, Raphaël : « le glissement jusqu'à Valider n'était pas naturel ») : trajet plus lent (≈ 0,5 à 1,6 s),
+    // vitesse qui varie, et sur un long trajet un léger dépassement puis une petite correction, comme une vraie main.
+    const steps = Math.max(18, Math.min(90, Math.round(dist / rand(6, 11))));
     for (let i = 1; i <= steps; i++) {
       const t = i / steps, e = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
       const px = (1 - e) ** 3 * sx + 3 * (1 - e) ** 2 * e * cx1 + 3 * (1 - e) * e ** 2 * cx2 + e ** 3 * x;
       const py = (1 - e) ** 3 * sy + 3 * (1 - e) ** 2 * e * cy1 + 3 * (1 - e) * e ** 2 * cy2 + e ** 3 * y;
       await this.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: Math.round(px), y: Math.round(py) }).catch(() => {});
-      await sleep(rand(6, 22));
+      await sleep(rand(8, 26) + (Math.random() < 0.06 ? rand(40, 140) : 0));
     }
     this.mx = x; this.my = y;
+    if (dist > 250 && Math.random() < 0.6 && !this._noOvershoot) {
+      const ox = x + rand(4, 14) * Math.sign(x - sx || 1), oy = y + rand(-6, 6);
+      await this.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: Math.round(ox), y: Math.round(oy) }).catch(() => {});
+      await sleep(rand(60, 160));
+      for (let i = 1; i <= 4; i++) { await this.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: Math.round(ox + (x - ox) * i / 4), y: Math.round(oy + (y - oy) * i / 4) }).catch(() => {}); await sleep(rand(15, 40)); }
+    }
   }
 
   async wander(n = ri(1, 3)) {
@@ -126,7 +134,7 @@ class Human {
 
   async clickAt(x, y) {
     await this.moveTo(x + rand(-3, 3), y + rand(-2, 2));
-    await sleep(rand(80, 260));
+    await sleep(rand(220, 600)); // 2.9.23 : on « vise » un instant avant de cliquer
     await this.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: this.mx, y: this.my, button: 'left', clickCount: 1 });
     await sleep(rand(45, 130));
     await this.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: this.mx, y: this.my, button: 'left', clickCount: 1 });

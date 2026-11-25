@@ -788,9 +788,11 @@ async function reopenAfterBoot() {
     if (sp && !openSet.has(sp.id)) await openProfile(sp.id, { url: 'https://fr.shein.com/' }).catch(() => {});
     return;
   }
+  // 2.9.23 : le profil Sourcing (vérif des prix SHEIN) d'abord, tout de suite
+  { const sp = sourcingProfile(); if (sp && !openSet.has(sp.id) && !launching.has(sp.id) && store.settings.sourcingDay !== false) { await openProfile(sp.id, { url: 'https://fr.shein.com/' }).catch(() => {}); await sleep(10000); } }
   const ids = (store.keepOpen || []).filter((id) => findProfile(id) && !findProfile(id).sourcing);
   if (!ids.length) return;
-  log(`Démarrage avec Windows : réouverture de ${ids.length} profil(s)`, 'info');
+  log(`Lancement de GB : réouverture de ${ids.length} profil(s)`, 'info');
   for (const id of ids) {
     if (openSet.has(id) || launching.has(id)) continue;
     await openProfile(id).catch(() => {});
@@ -2856,7 +2858,9 @@ app.whenReady().then(() => {
   setTimeout(() => refreshRealIp().then(checkConflicts).catch(() => {}), 8000);
   setupUpdater();
   applyAutoStart();
-  if (process.argv.includes('--autostart')) setTimeout(() => reopenAfterBoot().catch(() => {}), 20000);
+  // 2.9.23 (25/11, Raphaël) : à CHAQUE lancement (démarrage Windows, mise à jour, relance à la main) — profil Sourcing tout de suite,
+  // puis les comptes Vinted qui étaient ouverts (avant : seulement au démarrage de Windows → comptes fermés après chaque mise à jour)
+  setTimeout(() => reopenAfterBoot().catch(() => {}), 15000);
   setTimeout(() => dotbWatch().catch(() => {}), 30000);
   setTimeout(() => updateWebstoreExtensions(false), 15000);
 });
