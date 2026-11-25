@@ -1083,12 +1083,24 @@ async function vintedRaisePrice(p, r) {
     const SUBMIT2 = `() => [...document.querySelectorAll('[class*="form-actions" i] button, [class*="form-actions" i] [role=button]')].filter((b) => b.offsetParent && !b.disabled)
       .find((b) => /^(valider|enregistrer|sauvegarder|mettre à jour|save)/i.test((b.innerText || '').trim()))`;
     const hasForm = await h.eval(`!!(${SUBMIT2})()`).catch(() => false);
-    if (!(await h.clickEl(hasForm ? SUBMIT2 : SUBMIT))) return { ok: false, note: 'bouton « Valider » introuvable', before: curN };
-    for (let i = 0; i < 25; i++) {
-      await sleep(800);
-      const u = String(await h.url() || '');
-      if (!/\/edit/.test(u)) return { ok: true, before: Number.isFinite(curN) ? curN : undefined, after: r.to };
+    // 2.9.25 (25/11, Raphaël : « ça arrive souvent d'oublier Valider ») : jusqu'à 3 essais pour que « Valider » parte vraiment —
+    // 1) clic souris, 2) bouton reciblé (la barre a pu bouger) + clic, 3) focus + touche Entrée ; on attend ~8 s après chacun.
+    const FINDER = hasForm ? SUBMIT2 : SUBMIT;
+    const left = async (secs) => { for (let i = 0; i < secs * 2; i++) { await sleep(500); if (!/\/edit/.test(String(await h.url() || ''))) return true; } return false; };
+    let saved = false;
+    for (let attempt = 1; attempt <= 3 && !saved; attempt++) {
+      if (attempt === 3) {
+        const ok = await h.eval(`(() => { const b = (${FINDER})(); if (!b) return false; b.focus(); return document.activeElement === b; })()`).catch(() => false);
+        if (ok) { await sleep(rand(250, 500)); await h.key('Enter', 'Enter', 13); }
+        else if (!(await h.clickEl(FINDER))) break;
+      } else if (!(await h.clickEl(FINDER))) {
+        if (attempt === 1) return { ok: false, note: 'bouton « Valider » introuvable', before: curN };
+        break;
+      }
+      saved = await left(attempt === 1 ? 10 : 8);
+      if (!saved && attempt < 3) log(`${pcode(p)} : « Valider » pas pris (essai ${attempt}), on réessaie`, 'warn');
     }
+    if (saved) return { ok: true, before: Number.isFinite(curN) ? curN : undefined, after: r.to };
     const err = await h.eval(`[...document.querySelectorAll('[class*="error" i], [role=alert]')].map((e) => e.innerText.trim()).filter(Boolean).join(' | ').slice(0, 150)`).catch(() => '');
     // 2.9.17 : pas de changement de page visible → on vérifie pour de vrai en rechargeant la fiche de modification
     try {
