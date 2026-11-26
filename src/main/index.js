@@ -1104,6 +1104,10 @@ async function vintedRaisePrice(p, r) {
     const FINDER = hasForm ? SUBMIT2 : SUBMIT;
     const left = async (secs) => { for (let i = 0; i < secs * 2; i++) { await sleep(500); if (!/\/edit/.test(String(await h.url() || ''))) return true; } return false; };
     let saved = false;
+    let modalSeen = '';
+    const MODAL = `() => [...document.querySelectorAll('[role=dialog], [aria-modal="true"], [class*="modal" i]')].filter((d) => d.offsetParent && (d.innerText || '').trim()).map((d) => d.innerText.trim().replace(/\\s+/g, ' ')).join(' | ').slice(0, 300)`;
+    const CONFIRM = `() => [...document.querySelectorAll('[role=dialog] button, [aria-modal="true"] button, [class*="modal" i] button')].filter((b) => b.offsetParent && !b.disabled)
+      .find((b) => /^(confirmer|continuer|oui|enregistrer|valider|garder|conserver|mettre à jour|ok|j'ai compris|publier)/i.test((b.innerText || '').trim()) && !/annuler|retour|modifier le prix|non/i.test(b.innerText))`;
     for (let attempt = 1; attempt <= 3 && !saved; attempt++) {
       if (attempt === 3) {
         const ok = await h.eval(`(() => { const b = (${FINDER})(); if (!b) return false; b.focus(); return document.activeElement === b; })()`).catch(() => false);
@@ -1112,6 +1116,15 @@ async function vintedRaisePrice(p, r) {
       } else if (!(await h.clickEl(FINDER))) {
         if (attempt === 1) return { ok: false, note: 'bouton « Valider » introuvable', before: curN };
         break;
+      }
+      // 2.9.27 (26/11) : « prix toujours à X € après Valider » sur toutes les hausses → Vinted affiche sans doute une fenêtre
+      // de confirmation (prix plus haut que conseillé…). On la lit (gardée pour le diagnostic) et on clique son bouton de confirmation.
+      await sleep(rand(1500, 2500));
+      const mt = await h.eval(`(${MODAL})()`).catch(() => '');
+      if (mt) {
+        modalSeen = mt;
+        log(`${pcode(p)} : fenêtre Vinted après « Valider » : ${mt.slice(0, 120)}`, 'info');
+        if (await h.eval(`!!(${CONFIRM})()`).catch(() => false)) { await sleep(rand(400, 900)); await h.clickEl(CONFIRM).catch(() => {}); }
       }
       saved = await left(attempt === 1 ? 10 : 8);
       if (!saved && attempt < 3) log(`${pcode(p)} : « Valider » pas pris (essai ${attempt}), on réessaie`, 'warn');
@@ -1126,7 +1139,7 @@ async function vintedRaisePrice(p, r) {
       let now = NaN;
       for (let i = 0; i < 15 && !Number.isFinite(now); i++) { now = await readVal().catch(() => NaN); if (!Number.isFinite(now)) await sleep(700); }
       if (Number.isFinite(now) && Math.abs(now - r.to) <= 0.001) return { ok: true, before: Number.isFinite(curN) ? curN : undefined, after: r.to, note: 'vérifié après rechargement' };
-      if (Number.isFinite(now)) return { ok: false, note: `prix toujours à ${now} € après « Valider »${err ? ` : ${err}` : ''}`, before: curN };
+      if (Number.isFinite(now)) return { ok: false, note: `prix toujours à ${now} € après « Valider »${err ? ` : ${err}` : ''}${modalSeen ? ` · fenêtre : ${modalSeen.slice(0, 160)}` : ' · aucune fenêtre vue'}`, before: curN };
     } catch { /* on garde l'erreur d'origine */ }
     return { ok: false, note: `enregistrement non confirmé${err ? ` : ${err}` : ''}`, before: curN };
   } finally {
