@@ -1063,6 +1063,11 @@ async function vintedRaisePrice(p, r) {
       if (Number.isFinite(curN) && curN <= r.to + 0.001) return { ok: false, skipped: true, note: `déjà à ${curN} €`, before: curN };
       if (Number.isFinite(curN) && r.to < curN * 0.8) return { ok: false, skipped: true, note: `baisse trop forte (${curN} → ${r.to} €)`, before: curN };
     } else if (Number.isFinite(curN) && curN >= r.to - 0.001) return { ok: false, skipped: true, note: `déjà à ${curN} €`, before: curN };
+    // 2.9.27 (26/11) : Vinted refuse une hausse de plus de ~+35 % d'un coup (« prix toujours à X € après Valider ») →
+    // palier de +34 % max à partir du prix RÉEL de l'annonce ; le site garde la hausse en attente pour le palier suivant.
+    const goal = r.to;
+    const step = (!r.down && Number.isFinite(curN) && curN > 0 && goal > curN * 1.34) ? Math.max(Math.floor(curN * 1.34), Math.ceil(curN) + 1) : goal;
+    r = { ...r, to: step };
     const txt = (cur.includes(',') ? r.to.toFixed(2).replace('.', ',') : r.to.toFixed(2)).replace(/[.,]00$/, '');
     // Uniquement de vrais clics et de vraies touches : clic dans le champ, Fin, effacer chiffre par chiffre, taper le prix
     await h.clickEl(FIND);
@@ -1092,6 +1097,10 @@ async function vintedRaisePrice(p, r) {
     // on quitte le champ avec la touche Tab (comme une personne), pas en code
     await h.key('Tab', 'Tab', 9);
     await sleep(rand(600, 1200));
+    // 2.9.28 (26/11, Raphaël : « que GB montre vraiment ce qu'il voit ») : capture d'écran juste avant « Valider »
+    // (envoyée au site seulement si le changement rate, avec une 2e capture après les essais)
+    const snap = async () => { try { const x = await h.send('Page.captureScreenshot', { format: 'jpeg', quality: 45 }); return x && x.data; } catch { return null; } };
+    const shotBefore = await snap();
     const SUBMIT = `() => [...document.querySelectorAll('button, [role=button]')].filter((b) => b.offsetParent && !b.disabled)
       .find((b) => /upload-form-save|save-button|submit/i.test(b.getAttribute('data-testid') || '') || b.type === 'submit' && !/brouillon|draft|supprimer|annuler/i.test(b.innerText)
         || /^(enregistrer|sauvegarder|mettre à jour|valider|save)/i.test((b.innerText || '').trim()) && !/brouillon|draft/i.test(b.innerText))`;
@@ -1108,8 +1117,20 @@ async function vintedRaisePrice(p, r) {
     const MODAL = `() => [...document.querySelectorAll('[role=dialog], [aria-modal="true"], [class*="modal" i]')].filter((d) => d.offsetParent && (d.innerText || '').trim()).map((d) => d.innerText.trim().replace(/\\s+/g, ' ')).join(' | ').slice(0, 300)`;
     const CONFIRM = `() => [...document.querySelectorAll('[role=dialog] button, [aria-modal="true"] button, [class*="modal" i] button')].filter((b) => b.offsetParent && !b.disabled)
       .find((b) => /^(confirmer|continuer|oui|enregistrer|valider|garder|conserver|mettre à jour|ok|j'ai compris|publier)/i.test((b.innerText || '').trim()) && !/annuler|retour|modifier le prix|non/i.test(b.innerText))`;
-    for (let attempt = 1; attempt <= 3 && !saved; attempt++) {
-      if (attempt === 3) {
+    // 2.9.28 (26/11) : diagnostic — ce qui se trouve VRAIMENT sous le bouton (voile, bannière…), son texte, l'état du champ prix
+    const DIAG = `(() => { const b = (${FINDER})(); const r = b ? b.getBoundingClientRect() : null;
+      const top = r ? document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) : null;
+      const covered = b && top && top !== b && !b.contains(top) ? (top.className || top.tagName).toString().slice(0, 60) : '';
+      const inp = (${FIND})();
+      const toast = [...document.querySelectorAll('[class*="toast" i], [class*="snackbar" i], [class*="notification" i], [role=status]')].map((e) => e.innerText.trim()).filter(Boolean).join(' | ').slice(0, 120);
+      return 'bouton « ' + (b ? b.innerText.trim().slice(0, 20) : 'absent') + ' »' + (b && b.disabled ? ' désactivé' : '') + (covered ? ' · couvert par ' + covered : '') + ' · champ ' + (inp ? inp.value : '?') + (toast ? ' · message : ' + toast : '') + (r && (r.y > innerHeight || r.y < 0) ? ' · hors écran' : ''); })()`;
+    let diag = '';
+    for (let attempt = 1; attempt <= 4 && !saved; attempt++) {
+      if (attempt === 1) diag = await h.eval(DIAG).catch(() => '');
+      if (attempt === 4) {
+        // 4e essai : envoi du formulaire comme le navigateur le ferait (requestSubmit), si les clics ne passent pas
+        await h.eval(`(() => { const b = (${FINDER})(); const f = (b && b.form) || (${FIND})().form; if (f && f.requestSubmit) { f.requestSubmit(b && b.form === f ? b : undefined); return true; } if (b) b.click(); return !!b; })()`).catch(() => false);
+      } else if (attempt === 3) {
         const ok = await h.eval(`(() => { const b = (${FINDER})(); if (!b) return false; b.focus(); return document.activeElement === b; })()`).catch(() => false);
         if (ok) { await sleep(rand(250, 500)); await h.key('Enter', 'Enter', 13); }
         else if (!(await h.clickEl(FINDER))) break;
@@ -1127,9 +1148,19 @@ async function vintedRaisePrice(p, r) {
         if (await h.eval(`!!(${CONFIRM})()`).catch(() => false)) { await sleep(rand(400, 900)); await h.clickEl(CONFIRM).catch(() => {}); }
       }
       saved = await left(attempt === 1 ? 10 : 8);
-      if (!saved && attempt < 3) log(`${pcode(p)} : « Valider » pas pris (essai ${attempt}), on réessaie`, 'warn');
+      if (!saved && attempt < 4) log(`${pcode(p)} : « Valider » pas pris (essai ${attempt}), on réessaie`, 'warn');
     }
     if (saved) return { ok: true, before: Number.isFinite(curN) ? curN : undefined, after: r.to };
+    // Échec : on envoie au site ce que GB voyait (avant « Valider » et maintenant), pour comprendre ce qui bloque
+    try {
+      const shotAfter = await snap();
+      const key = store.settings.gbKey, base = (store.settings.gbUrl || '').replace(/\/+$/, '');
+      const lbl = `${pcode(p)}_${String(r.vintedId)}`;
+      const note = `${p.name} · ${String(r.title).slice(0, 60)} · ${curN} → ${r.to} € · ${diag}${modalSeen ? ' · fenêtre : ' + modalSeen.slice(0, 200) : ''} · url ${String(await h.url() || '').slice(0, 80)}`;
+      for (const [k, img] of [['avant-valider', shotBefore], ['apres-essais', shotAfter]]) {
+        if (img && key && base) await fetch(`${base}/api/gb/screenshot`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` }, body: JSON.stringify({ label: `${lbl}_${k}`, img, note }) }).catch(() => {});
+      }
+    } catch { /* capture impossible : on continue */ }
     const err = await h.eval(`[...document.querySelectorAll('[class*="error" i], [role=alert]')].map((e) => e.innerText.trim()).filter(Boolean).join(' | ').slice(0, 150)`).catch(() => '');
     // 2.9.17 : pas de changement de page visible → on vérifie pour de vrai en rechargeant la fiche de modification
     try {
@@ -1139,7 +1170,7 @@ async function vintedRaisePrice(p, r) {
       let now = NaN;
       for (let i = 0; i < 15 && !Number.isFinite(now); i++) { now = await readVal().catch(() => NaN); if (!Number.isFinite(now)) await sleep(700); }
       if (Number.isFinite(now) && Math.abs(now - r.to) <= 0.001) return { ok: true, before: Number.isFinite(curN) ? curN : undefined, after: r.to, note: 'vérifié après rechargement' };
-      if (Number.isFinite(now)) return { ok: false, note: `prix toujours à ${now} € après « Valider »${err ? ` : ${err}` : ''}${modalSeen ? ` · fenêtre : ${modalSeen.slice(0, 160)}` : ' · aucune fenêtre vue'}`, before: curN };
+      if (Number.isFinite(now)) return { ok: false, note: `prix toujours à ${now} € après « Valider »${err ? ` : ${err}` : ''}${modalSeen ? ` · fenêtre : ${modalSeen.slice(0, 160)}` : ' · aucune fenêtre vue'}${diag ? ` · ${diag.slice(0, 200)}` : ''}`, before: curN };
     } catch { /* on garde l'erreur d'origine */ }
     return { ok: false, note: `enregistrement non confirmé${err ? ` : ${err}` : ''}`, before: curN };
   } finally {
