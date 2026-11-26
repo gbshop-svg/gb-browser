@@ -969,9 +969,23 @@ async function raiseTick() {
     const dg = raiseDiag = { at: new Date().toISOString(), version: app.getVersion(), inWindow, recus: all.length, a_faire: raises.length, faits: 0, echecs: 0, ignores: 0, sans_profil: 0, prudence: 0, occupe: 0, ouverts_special: 0, ouverture_ko: 0 };
     if (!raises.length) return;
     let done = 0;
-    // 2.9.11 : plus de limite par jour ni par passage — toutes les hausses en attente, une par une, à rythme humain
-    for (const r of raises) {
-      const p = store.profiles.find((x) => r.dotbAccountId && String(x.dotbAccountId) === String(r.dotbAccountId));
+    // 2.9.26 (26/11, Raphaël : « 3 à 6 min c'est PAR COMPTE, il peut modifier plusieurs comptes ») : le délai calme de 3–6 min
+    // s'applique à CHAQUE compte ; entre deux comptes différents, juste 20–45 s. On tourne sur les comptes (un changement
+    // par compte, puis le suivant), un passage dure au plus 20 min et le suivant reprend.
+    const nextAt = store.raiseNextAt || (store.raiseNextAt = {});
+    const profOf = (r) => store.profiles.find((x) => r.dotbAccountId && String(x.dotbAccountId) === String(r.dotbAccountId));
+    const pending = [...raises];
+    while (pending.length && Date.now() - raisingSince < 20 * 60e3) {
+      const now0 = Date.now();
+      let idx = pending.findIndex((x) => { const pp = profOf(x); return x.test || !pp || (nextAt[pp.id] || 0) <= now0; });
+      if (idx < 0) {
+        const wait = Math.min(...pending.map((x) => nextAt[profOf(x).id] || 0)) - now0;
+        if (wait <= 0 || Date.now() - raisingSince + wait > 20 * 60e3) break;
+        await sleep(wait + rand(2e3, 8e3));
+        continue;
+      }
+      const r = pending.splice(idx, 1)[0];
+      const p = profOf(r);
       if (!p || p.sourcing || p.closedByVinted) { dg.sans_profil++; continue; }
       if (busy.has(p.id)) { dg.occupe++; continue; }
       if (prudenceActive(p)) { dg.prudence++; continue; }
@@ -999,9 +1013,11 @@ async function raiseTick() {
         body: JSON.stringify({ id: r.id, ...out }),
       }).catch(() => {});
       done++;
-      // 2.9.22 : rythme calme — 3 à 6 min entre deux changements ; un passage s'arrête après 20 min (le suivant reprend)
+      // 2.9.26 : 3–6 min avant le prochain changement SUR CE COMPTE ; 20–45 s avant de passer à un autre compte
+      nextAt[p.id] = Date.now() + (r.test ? rand(25e3, 70e3) : rand(180e3, 360e3));
+      save();
       if (Date.now() - raisingSince > 20 * 60e3) break;
-      await sleep(r.test ? rand(25e3, 70e3) : rand(180e3, 360e3));
+      await sleep(rand(20e3, 45e3));
     }
   } catch { /* site injoignable : on réessaiera */ } finally {
     for (const id of openedForRaise) {
