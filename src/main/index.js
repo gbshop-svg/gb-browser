@@ -948,7 +948,7 @@ function raisesToday() {
 }
 async function raiseTick() {
   // 2.9.21 : garde-fou — un passage bloqué (page Vinted figée) ne bloque plus les suivants plus de 25 min
-  if (raising && Date.now() - raisingSince > 25 * 60e3) { log('Prix Vinted : passage précédent bloqué, on repart', 'warn'); raising = false; }
+  if (raising && Date.now() - raisingSince > 60 * 60e3) { /* 2.9.31 : passage rapide de 8h jusqu'à 55 min */ log('Prix Vinted : passage précédent bloqué, on repart', 'warn'); raising = false; }
   if (raising || store.settings.autoRaise === false) return;
   const key = store.settings.gbKey, base = (store.settings.gbUrl || '').replace(/\/+$/, '');
   if (!key || !base) return;
@@ -956,7 +956,9 @@ async function raiseTick() {
   // 2.9.18 (24/11, Raphaël) : changements de prix UNIQUEMENT de 5h à 8h, jamais la journée — sauf un TEST demandé (à toute heure, comptes ouverts) — 2.9.19
   // 2.9.22 (25/11, Raphaël) : les prix se changent EN JOURNÉE (10h–19h), entre les publications DotB (le site retire les comptes
   // qui publient dans les 15 min), à un rythme calme ; plus jamais la nuit.
-  const inWindow = h >= 10 && h < 19;
+  const inWindow = h === 8; // 2.9.31 (28/11, Raphaël) : modifications de prix Vinted UNIQUEMENT de 8h à 9h (un test à la demande reste possible à toute heure)
+  const burst = h === 8; // 2.9.31 (28/11, Raphaël) : de 8h à 9h = gros passage rapide sur tous les comptes (DotB ne publie pas encore)
+  const PASS_MS = (burst ? 55 : 20) * 60e3; // 2.9.31 (28/11, Raphaël) : dès 8h (DotB ne publie qu'à partir de 9h) pour écouler la file de hausses
   // 2.9.21 : on attend que la fin de nuit ait rouvert les comptes (sinon on ouvrirait/fermerait en même temps qu'elle)
   if (nightRunning) return;
   raising = true; raisingSince = Date.now();
@@ -975,12 +977,12 @@ async function raiseTick() {
     const nextAt = store.raiseNextAt || (store.raiseNextAt = {});
     const profOf = (r) => store.profiles.find((x) => r.dotbAccountId && String(x.dotbAccountId) === String(r.dotbAccountId));
     const pending = [...raises];
-    while (pending.length && Date.now() - raisingSince < 20 * 60e3) {
+    while (pending.length && Date.now() - raisingSince < PASS_MS) {
       const now0 = Date.now();
       let idx = pending.findIndex((x) => { const pp = profOf(x); return x.test || !pp || (nextAt[pp.id] || 0) <= now0; });
       if (idx < 0) {
         const wait = Math.min(...pending.map((x) => nextAt[profOf(x).id] || 0)) - now0;
-        if (wait <= 0 || Date.now() - raisingSince + wait > 20 * 60e3) break;
+        if (wait <= 0 || Date.now() - raisingSince + wait > PASS_MS) break;
         await sleep(wait + rand(2e3, 8e3));
         continue;
       }
@@ -1014,10 +1016,10 @@ async function raiseTick() {
       }).catch(() => {});
       done++;
       // 2.9.26 : 3–6 min avant le prochain changement SUR CE COMPTE ; 20–45 s avant de passer à un autre compte
-      nextAt[p.id] = Date.now() + (r.test ? rand(25e3, 70e3) : rand(180e3, 360e3));
+      nextAt[p.id] = Date.now() + (r.test ? rand(25e3, 70e3) : burst ? rand(70e3, 130e3) : rand(180e3, 360e3));
       save();
-      if (Date.now() - raisingSince > 20 * 60e3) break;
-      await sleep(rand(20e3, 45e3));
+      if (Date.now() - raisingSince > PASS_MS) break;
+      await sleep(burst ? rand(8e3, 20e3) : rand(20e3, 45e3));
     }
   } catch { /* site injoignable : on réessaiera */ } finally {
     for (const id of openedForRaise) {
@@ -1736,6 +1738,41 @@ function autoLinkDotb() {
 // ── Surveillance DotB (pont hors ligne, nouvelles commandes) ──
 const bridgeState = new Map();
 let lastOrderCheck = new Date().toISOString();
+// 2.9.30 (26/11, Raphaël : « dès qu'un profil n'a plus DotB, paf tu réactives, dans les bons timings ») :
+// un profil OUVERT dont DotB est hors ligne depuis ≥ 6 min (2 relevés) est réparé tout seul :
+//   1) relance des automatisations DotB (bridge) ; 2) si toujours hors ligne 10 min après : fermeture + réouverture du profil.
+// Jamais : profil occupé (hausse de prix, warm, démarrage…), en prudence, de nuit (mode nuit), plus d'une réparation à la fois,
+// plus de 6 réparations / profil / jour, ni moins de 10 min entre deux essais.
+const dotbDownSince = new Map(); const dotbHeal = new Map(); let dotbHealBusy = false;
+async function dotbAutoHeal(prof, on, label) {
+  const id = prof.id;
+  if (on) { dotbDownSince.delete(id); const h = dotbHeal.get(id); if (h && h.step) { log(`${pcode(prof)} : DotB de nouveau en ligne`, 'success'); dotbHeal.set(id, { ...h, step: 0 }); } return; }
+  if (!prof.dotbAuto || !openSet.has(id) || launching.has(id) || prudenceActive(prof) || (nightOn() && inNight())) { dotbDownSince.delete(id); return; }
+  const now = Date.now();
+  if (!dotbDownSince.has(id)) { dotbDownSince.set(id, now); return; }
+  if (now - dotbDownSince.get(id) < 6 * 60e3) return;
+  if (dotbHealBusy || busy.has(id)) return;
+  const d = today(); const h = dotbHeal.get(id) || { at: 0, step: 0, day: d, n: 0 };
+  if (h.day !== d) { h.day = d; h.n = 0; h.step = 0; }
+  if (now - h.at < 10 * 60e3 || h.n >= 6) return;
+  dotbHealBusy = true;
+  try {
+    h.at = now; h.n++;
+    if (!h.step) {
+      h.step = 1; dotbHeal.set(id, h);
+      log(`${pcode(prof)} : DotB hors ligne depuis plus de 6 min → relance des automatisations (${label})`, 'warn');
+      await runDotbAuto(id).catch(() => {});
+    } else {
+      h.step = 0; dotbHeal.set(id, h);
+      log(`${pcode(prof)} : DotB toujours hors ligne → fermeture et réouverture du profil`, 'warn');
+      await closeProfile(id, { quiet: true, keepInList: true }).catch(() => {});
+      await sleep(5000);
+      await openProfile(id, {}).catch(() => {});
+    }
+    dotbDownSince.set(id, Date.now());
+  } finally { dotbHealBusy = false; }
+}
+
 async function dotbWatch() {
   if (!store.settings.dotbToken) return;
   const acc = await dotbFetch('GET', '/accounts');
@@ -1748,6 +1785,7 @@ async function dotbWatch() {
       const prev = bridgeState.get(a.id);
       bridgeState.set(a.id, on);
       const prof = store.profiles.find((p) => String(p.dotbAccountId) === String(a.id));
+      if (prof) dotbAutoHeal(prof, on, a.login || a.id).catch(() => {});
       if (prev === true && !on && prof && !(nightOn() && inNight())) {
         log(`${pcode(prof)} : DotB hors ligne (${a.login || a.id})`, 'warn');
         notify('DotB hors ligne', `${pcode(prof)} ${prof.name} (${a.login || ''}) : l’extension ne répond plus.`);
