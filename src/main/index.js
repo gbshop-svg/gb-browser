@@ -956,9 +956,9 @@ async function raiseTick() {
   // 2.9.18 (24/11, Raphaël) : changements de prix UNIQUEMENT de 5h à 8h, jamais la journée — sauf un TEST demandé (à toute heure, comptes ouverts) — 2.9.19
   // 2.9.22 (25/11, Raphaël) : les prix se changent EN JOURNÉE (10h–19h), entre les publications DotB (le site retire les comptes
   // qui publient dans les 15 min), à un rythme calme ; plus jamais la nuit.
-  const inWindow = h === 8; // 2.9.31 (28/11, Raphaël) : modifications de prix Vinted UNIQUEMENT de 8h à 9h (un test à la demande reste possible à toute heure)
-  const burst = h === 8; // 2.9.31 (28/11, Raphaël) : de 8h à 9h = gros passage rapide sur tous les comptes (DotB ne publie pas encore)
-  const PASS_MS = (burst ? 55 : 20) * 60e3; // 2.9.31 (28/11, Raphaël) : dès 8h (DotB ne publie qu'à partir de 9h) pour écouler la file de hausses
+  const inWindow = h >= 7 && h < 9; // 2.9.32 (28/11, Raphaël) : modifications de prix Vinted UNIQUEMENT de 7h à 9h (un test à la demande reste possible à toute heure)
+  const burst = inWindow; // 2.9.31 (28/11, Raphaël) : de 8h à 9h = gros passage rapide sur tous les comptes (DotB ne publie pas encore)
+  const PASS_MS = (burst ? 55 : 20) * 60e3; // passage de 55 min max en rafale // 2.9.31 (28/11, Raphaël) : dès 8h (DotB ne publie qu'à partir de 9h) pour écouler la file de hausses
   // 2.9.21 : on attend que la fin de nuit ait rouvert les comptes (sinon on ouvrirait/fermerait en même temps qu'elle)
   if (nightRunning) return;
   raising = true; raisingSince = Date.now();
@@ -1016,10 +1016,10 @@ async function raiseTick() {
       }).catch(() => {});
       done++;
       // 2.9.26 : 3–6 min avant le prochain changement SUR CE COMPTE ; 20–45 s avant de passer à un autre compte
-      nextAt[p.id] = Date.now() + (r.test ? rand(25e3, 70e3) : burst ? rand(70e3, 130e3) : rand(180e3, 360e3));
+      nextAt[p.id] = Date.now() + (r.test ? rand(25e3, 70e3) : burst ? rand(45e3, 90e3) : rand(180e3, 360e3));
       save();
       if (Date.now() - raisingSince > PASS_MS) break;
-      await sleep(burst ? rand(8e3, 20e3) : rand(20e3, 45e3));
+      await sleep(burst ? rand(5e3, 12e3) : rand(20e3, 45e3));
     }
   } catch { /* site injoignable : on réessaiera */ } finally {
     for (const id of openedForRaise) {
